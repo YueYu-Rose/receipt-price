@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>小票比价</title>
+<title>小票比价 · Receipt Price</title>
+<meta name="description" content="Snap your grocery receipts, let AI read them, and find which store sells each item for less.">
 <meta name="theme-color" content="#0E6B5C">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="小票比价">
@@ -12,79 +13,96 @@
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans:wght@400;600&family=Noto+Sans+SC:wght@400;600;700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans:wght@400;600;700&family=Noto+Sans+SC:wght@400;600;700&display=swap">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 <div class="wrap">
   <header class="top">
     <div>
-      <h1>小票比价</h1>
-      <p class="sub" id="stats">正在载入…</p>
+      <h1 data-t="appName"></h1>
+      <p class="sub" id="stats"></p>
     </div>
-    <button id="openSettings" class="icon-btn" aria-label="设置">设置</button>
+    <div class="top-btns">
+      <button id="langBtn" class="icon-btn" aria-label="Language"></button>
+      <button id="openSettings" class="icon-btn" data-t="settings"></button>
+    </div>
   </header>
 
   <section class="card setup" id="setup" hidden>
-    <h2>第一步：填入免费的 Gemini API 密钥</h2>
+    <h2 data-t="setupTitle"></h2>
     <ol>
-      <li>打开 <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a>，用 Google 账号登录</li>
-      <li>点 "Create API key"，复制生成的密钥</li>
-      <li>点右上角"设置"，粘贴进去保存</li>
+      <li data-t-html="setup1"></li>
+      <li data-t="setup2"></li>
+      <li data-t="setup3"></li>
     </ol>
-    <p class="hint">密钥只保存在这台手机的浏览器里，不会上传到任何别的地方。</p>
+    <p class="hint" data-t="keyLocal"></p>
   </section>
 
-  <section class="card scan" aria-label="扫描小票">
+  <section class="notice-bar" id="homeTip" hidden>
+    <p data-t="homeTip"></p>
+    <button id="homeTipClose" data-t="gotIt"></button>
+  </section>
+
+  <section class="notice-bar" id="backupTip" hidden>
+    <p id="backupTipText"></p>
+    <button id="backupTipBtn" class="solid" data-t="exportBackup"></button>
+  </section>
+
+  <section class="card scan">
     <div class="scan-actions">
-      <label class="btn primary" id="camBtn">拍小票<input id="camInput" type="file" accept="image/*" capture="environment"></label>
-      <label class="btn" id="galBtn">从相册选<input id="galInput" type="file" accept="image/*" multiple></label>
+      <label class="btn primary" id="camBtn"><span data-t="takePhoto"></span><input id="camInput" type="file" accept="image/*" capture="environment"></label>
+      <label class="btn" id="galBtn"><span data-t="choosePhotos"></span><input id="galInput" type="file" accept="image/*" multiple></label>
     </div>
-    <p class="hint">可以连续拍，也可以一次选多张。照片排队自动识别，识别期间请保持这个页面开着。</p>
+    <p class="hint" data-t="scanHint"></p>
     <ul class="queue" id="queue"></ul>
   </section>
 
   <div class="tabs" role="tablist">
-    <button role="tab" id="tabCompare" aria-selected="true">比价</button>
-    <button role="tab" id="tabReceipts" aria-selected="false">小票</button>
+    <button role="tab" id="tabCompare" aria-selected="true" data-t="tabCompare"></button>
+    <button role="tab" id="tabReceipts" aria-selected="false" data-t="tabReceipts"></button>
   </div>
 
-  <section id="viewCompare" aria-label="比价">
+  <section id="viewCompare">
     <div class="controls">
-      <input type="search" id="search" placeholder="搜商品，如 yogurt / 酸奶">
-      <div class="seg" role="group" aria-label="比价方式">
-        <button id="modeExact" aria-pressed="true">同款</button>
-        <button id="modeCat" aria-pressed="false">同类</button>
+      <input type="search" id="search">
+      <div class="seg" role="group">
+        <button id="modeExact" aria-pressed="true" data-t="modeExact"></button>
+        <button id="modeCat" aria-pressed="false" data-t="modeCat"></button>
       </div>
-      <label class="chk"><input type="checkbox" id="multiOnly">只看多家店</label>
+      <label class="chk"><input type="checkbox" id="multiOnly"><span data-t="multiOnly"></span></label>
     </div>
     <div class="list" id="compareList"></div>
-    <p class="hint">规格都知道时按单价比（每 oz / fl oz / 个）；缺规格时按包装价比，只能当参考。价格都是税前的最新一次记录。</p>
+    <p class="hint" data-t="compareHint"></p>
   </section>
 
-  <section id="viewReceipts" aria-label="小票" hidden>
+  <section id="viewReceipts" hidden>
     <div id="receiptList" class="stack"></div>
     <div class="backup">
-      <button id="exportBtn">导出备份</button>
-      <label class="btn small">导入备份<input id="importInput" type="file" accept="application/json,.json"></label>
+      <button id="exportBtn" data-t="exportBackup"></button>
+      <label class="btn small"><span data-t="importBackup"></span><input id="importInput" type="file" accept="application/json,.json"></label>
     </div>
-    <p class="hint">数据只存在这台手机的浏览器里。换手机或清除浏览器数据前，先导出备份。</p>
+    <p class="hint" data-t="backupHint"></p>
   </section>
+
+  <footer class="foot">
+    <a href="https://github.com/YueYu-Rose/receipt-price" target="_blank" rel="noopener" data-t="sourceLink"></a>
+  </footer>
 </div>
 
 <dialog id="settings">
-  <form method="dialog" class="settings-form" id="settingsForm">
-    <h2>设置</h2>
-    <label for="apiKey">Gemini API 密钥</label>
+  <form method="dialog" class="settings-form">
+    <h2 data-t="settings"></h2>
+    <label for="apiKey" data-t="apiKeyLabel"></label>
     <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="AIza…">
-    <p class="hint">在 <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> 免费申请。只保存在这台手机上。</p>
-    <label for="model">模型</label>
-    <input id="model" type="text" spellcheck="false">
-    <p class="hint">默认 gemini-2.5-flash。如果提示模型不存在，可以换成 AI Studio 里列出的其他 Flash 模型。</p>
-    <p class="notice">注意：Gemini 免费版上传的内容可能会被 Google 用来改进产品。拍照时可以把卡号那部分挡住。</p>
+    <p class="hint" data-t-html="apiKeyHint"></p>
+    <label for="model" data-t="modelLabel"></label>
+    <input id="model" type="text" spellcheck="false" autocapitalize="off">
+    <p class="hint" data-t="modelHint"></p>
+    <p class="notice" data-t="privacyNote"></p>
     <div class="row-btns">
-      <button value="cancel" formnovalidate>取消</button>
-      <button value="save" class="primary-btn" id="saveSettings">保存</button>
+      <button value="cancel" formnovalidate data-t="cancel"></button>
+      <button value="save" class="primary-btn" data-t="save"></button>
     </div>
   </form>
 </dialog>

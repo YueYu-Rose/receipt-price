@@ -17,6 +17,7 @@
   }
 }
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 html{-webkit-text-size-adjust:100%}
 body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.5;
   padding-inline:16px;padding-block:calc(20px + env(safe-area-inset-top,0px)) calc(48px + env(safe-area-inset-bottom,0px))}
@@ -104,3 +105,9 @@ dialog::backdrop{background:rgba(0,0,0,.4)}
 .settings-form label{font-weight:600;font-size:13.5px;margin-top:6px}
 .row-btns{display:flex;justify-content:flex-end;gap:8px;margin-top:8px}
 .primary-btn{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:600}
+.top-btns{display:flex;gap:8px}
+.notice-bar{display:flex;gap:12px;align-items:center;justify-content:space-between;background:var(--warn-bg);color:var(--warn);border-radius:14px;padding:12px 14px;font-size:13.5px}
+.notice-bar p{margin:0;flex:1}
+.notice-bar button{flex:none;font-size:13px;padding:7px 12px;background:transparent;color:var(--warn);border-color:currentColor}
+.notice-bar button.solid{background:var(--warn);color:var(--warn-bg);border-color:var(--warn);font-weight:600}
+.foot{text-align:center;font-size:12.5px;color:var(--muted);padding-top:8px}

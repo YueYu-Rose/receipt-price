@@ -3,30 +3,105 @@ const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money = n => (typeof n === 'number' && isFinite(n)) ? '$' + n.toFixed(2) : '—';
 
-/* ---------- storage (this phone's browser only) ---------- */
+/* ---------- storage (this device's browser only) ---------- */
 const store = {
   get(k, d){ try{ const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); }catch{ return d; } },
   set(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); return true; }catch{ return false; } },
 };
-const KEY_RECEIPTS = 'rp.receipts', KEY_API = 'rp.apiKey', KEY_MODEL = 'rp.model';
 const DEFAULT_MODEL = 'gemini-2.5-flash';
-
-let receipts = store.get(KEY_RECEIPTS, []);
+let receipts = store.get('rp.receipts', []);
 let mode = store.get('rp.mode', 'exact'), multiOnly = store.get('rp.multi', false), tab = store.get('rp.tab', 'compare');
+let lang = store.get('rp.lang', /^zh/i.test(navigator.language || '') ? 'zh' : 'en');
 let query = '', editing = null, confirmDel = null;
-
-function saveReceipts(){
-  if(!store.set(KEY_RECEIPTS, receipts)) $('#stats').textContent = '保存失败：浏览器存储已满或被禁用。先导出备份。';
-  render();
-}
+const apiKey = () => store.get('rp.apiKey', '');
+const model = () => store.get('rp.model', '') || DEFAULT_MODEL;
 const newId = () => 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-const apiKey = () => store.get(KEY_API, '');
-const model = () => store.get(KEY_MODEL, '') || DEFAULT_MODEL;
+
+/* ---------- text ---------- */
+const T = {
+  zh: {
+    appName:'小票比价', settings:'设置', langBtn:'EN',
+    setupTitle:'第一步：填入免费的 Gemini API 密钥',
+    setup1:'打开 <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a>，用 Google 账号登录',
+    setup2:'点 "Create API key"，复制生成的密钥', setup3:'点右上角"设置"，粘贴进去保存',
+    keyLocal:'密钥只保存在这台设备的浏览器里，不会上传到别的地方。每个人用自己的密钥，额度各算各的。',
+    homeTip:'建议在 Safari 点「分享」→「添加到主屏幕」，以后从主屏幕图标打开。否则如果 7 天没打开这个网站，Safari 可能会自动清除你的小票数据。',
+    gotIt:'知道了',
+    backupTip:n => `有 ${n} 张小票还没备份。数据只存在这台设备上，建议导出一份存到云盘。`,
+    exportBackup:'导出备份', importBackup:'导入备份',
+    backupHint:'数据只存在这台设备的浏览器里。换手机或清除浏览器数据前，先导出备份。iPhone 上可以直接存到 iCloud 云盘。',
+    takePhoto:'拍小票', choosePhotos:'从相册选',
+    scanHint:'可以连续拍，也可以一次选多张。照片排队自动识别，识别期间请保持这个页面开着。',
+    tabCompare:'比价', tabReceipts:'小票', search:'搜商品，如 yogurt / 酸奶',
+    modeExact:'同款', modeCat:'同类', multiOnly:'只看多家店',
+    compareHint:'规格都知道时按单价比（每 oz / fl oz / 个）；缺规格时按包装价比，只能当参考。价格都是税前的最新一次记录。',
+    sourceLink:'开源代码 · GitHub',
+    stats:(r,s,i) => `${r} 张小票 · ${s} 家店 · ${i} 件商品`, noReceipts:'还没有小票',
+    emptyCompare:'还没有小票。拍一张试试。', emptyMulti:'还没有在两家以上店买过的商品。多扫几张不同店的小票就会出现。', noMatch:'没有匹配的商品。',
+    chipUnit:'按单价', chipPkg:'规格未知 · 仅供参考', chipOne:'只有 1 家店', each:'个',
+    guessed:'店名是推测的', noAddr:'地址未知', noDate:'日期未知', nItems:n => `${n} 件`, qty:n => `${n} 件`, member:'会员价',
+    withTax:'含税 ', noTax:'无税', showItems:'查看商品', nameOk:'店名没错', rename:'改店名', del:'删除', delConfirm:'确认删除？',
+    save:'保存', cancel:'取消', storeName:'店名', unknownStore:'未知店',
+    apiKeyLabel:'Gemini API 密钥', apiKeyHint:'在 <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> 免费申请。只保存在这台设备上。',
+    modelLabel:'模型', modelHint:'默认 gemini-2.5-flash。如果提示模型不存在，可以换成 AI Studio 里列出的其他 Flash 模型。',
+    privacyNote:'注意：Gemini 免费版上传的内容可能会被 Google 用来改进产品。拍照时可以把卡号那部分挡住。',
+    saveFail:'保存失败：浏览器存储已满或被禁用。先导出备份。',
+    imported:n => `导入了 ${n} 张小票`, importFail:'导入失败：这不是小票比价导出的备份文件。',
+    queued:'排队中', working:'识别中…', paused:'已暂停：',
+    eNet:'网络连不上 Gemini，检查网络后点重试。', eKey:'API 密钥无效，到"设置"里重新填。', eForbid:'API 密钥没有权限，到"设置"里检查。',
+    eModel:m => `找不到模型 ${m}，到"设置"里换一个模型名。`, eQuota:'免费额度暂时用完了（每分钟或每天有上限），过一会儿再点重试。',
+    eHttp:c => `识别失败（${c}），点重试。`, eBlocked:'这张图片被拒绝识别，换一张试试。', eEmpty:'没有返回结果，点重试。',
+    eFormat:'识别结果格式不对，点重试。', eImage:'这张图片打不开，换一张试试。', eNoItems:'没读到商品，照片可能太糊或不是小票。', eOther:'识别失败，点重试。',
+    retry:'重试', remove:'移除', backupName:'小票比价备份',
+  },
+  en: {
+    appName:'Receipt Price', settings:'Settings', langBtn:'中文',
+    setupTitle:'Step 1: add a free Gemini API key',
+    setup1:'Open <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a> and sign in with a Google account',
+    setup2:'Tap "Create API key" and copy the key', setup3:'Tap Settings (top right), paste it and save',
+    keyLocal:'Your key stays in this browser on this device and is never sent anywhere else. Everyone uses their own key and their own free quota.',
+    homeTip:'Tip: in Safari, tap Share → Add to Home Screen and open the app from that icon. Otherwise Safari may clear your receipts if you don\'t open this site for 7 days.',
+    gotIt:'Got it',
+    backupTip:n => `${n} receipts aren't backed up. Your data only lives on this device, so save a backup to your cloud drive.`,
+    exportBackup:'Export backup', importBackup:'Import backup',
+    backupHint:'Your data lives only in this browser. Export a backup before switching phones or clearing browser data. On iPhone you can save it straight to iCloud Drive.',
+    takePhoto:'Take photo', choosePhotos:'Choose photos',
+    scanHint:'Snap one after another or pick several at once. Photos are read in a queue; keep this page open while they process.',
+    tabCompare:'Compare', tabReceipts:'Receipts', search:'Search items, e.g. yogurt',
+    modeExact:'Same product', modeCat:'Same type', multiOnly:'Only items from 2+ stores',
+    compareHint:'When every size is known, items are ranked by unit price (per oz / fl oz / each). Otherwise by package price, so treat those as rough. All prices are before tax and use the latest record.',
+    sourceLink:'Open source · GitHub',
+    stats:(r,s,i) => `${r} receipts · ${s} stores · ${i} items`, noReceipts:'No receipts yet',
+    emptyCompare:'No receipts yet. Snap one to start.', emptyMulti:'No item bought at 2+ stores yet. Scan receipts from different stores to see comparisons.', noMatch:'No matching items.',
+    chipUnit:'By unit price', chipPkg:'Size unknown · rough', chipOne:'1 store only', each:'ea',
+    guessed:'Store name guessed', noAddr:'Unknown address', noDate:'Unknown date', nItems:n => `${n} items`, qty:n => `qty ${n}`, member:'member price',
+    withTax:'incl. tax ', noTax:'no tax', showItems:'Show items', nameOk:'Name is right', rename:'Rename store', del:'Delete', delConfirm:'Delete for good?',
+    save:'Save', cancel:'Cancel', storeName:'Store name', unknownStore:'Unknown store',
+    apiKeyLabel:'Gemini API key', apiKeyHint:'Get one free at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>. Stored on this device only.',
+    modelLabel:'Model', modelHint:'Default is gemini-2.5-flash. If you get a "model not found" error, try another Flash model listed in AI Studio.',
+    privacyNote:'Note: on Gemini\'s free tier, Google may use what you upload to improve its products. You can cover your card number when taking the photo.',
+    saveFail:'Could not save: browser storage is full or blocked. Export a backup first.',
+    imported:n => `Imported ${n} receipts`, importFail:'Import failed: this isn\'t a Receipt Price backup file.',
+    queued:'Queued', working:'Reading…', paused:'Paused: ',
+    eNet:'Can\'t reach Gemini. Check your connection and tap Retry.', eKey:'Invalid API key. Update it in Settings.', eForbid:'This API key isn\'t allowed. Check it in Settings.',
+    eModel:m => `Model ${m} not found. Change the model name in Settings.`, eQuota:'Free quota used up for now (there are per-minute and per-day limits). Wait a bit and tap Retry.',
+    eHttp:c => `Reading failed (${c}). Tap Retry.`, eBlocked:'This image was refused. Try another photo.', eEmpty:'No result came back. Tap Retry.',
+    eFormat:'The result was malformed. Tap Retry.', eImage:'Can\'t open this image. Try another one.', eNoItems:'No items found. The photo may be blurry or not a receipt.', eOther:'Reading failed. Tap Retry.',
+    retry:'Retry', remove:'Remove', backupName:'receipt-price-backup',
+  },
+};
+const t = (k, ...a) => { const v = T[lang][k]; return typeof v === 'function' ? v(...a) : v; };
+function applyText(){
+  document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
+  document.querySelectorAll('[data-t]').forEach(el => el.textContent = t(el.dataset.t));
+  document.querySelectorAll('[data-t-html]').forEach(el => el.innerHTML = t(el.dataset.tHtml));
+  $('#langBtn').textContent = t('langBtn');
+  $('#search').placeholder = t('search');
+}
 
 /* ---------- units ---------- */
 const UNITS = { 'oz':['mass',28.3495], 'lb':['mass',453.592], 'g':['mass',1], 'kg':['mass',1000],
   'fl oz':['vol',29.5735], 'floz':['vol',29.5735], 'ml':['vol',1], 'l':['vol',1000], 'ct':['count',1] };
-const PER = { mass:['oz',28.3495], vol:['fl oz',29.5735], count:['个',1] };
 function norm(size){
   if(!size || !(Number(size.value) > 0)) return null;
   const u = UNITS[String(size.unit || '').toLowerCase().trim()];
@@ -34,15 +109,16 @@ function norm(size){
 }
 function sizeText(size){
   if(!size || !(Number(size.value) > 0)) return '';
-  return size.unit === 'ct' ? size.value + ' 个' : size.value + ' ' + size.unit;
+  return size.unit === 'ct' ? size.value + ' ' + t('each') : size.value + ' ' + size.unit;
 }
 function perText(price, n){
   if(!n) return '';
-  const [label, f] = PER[n.dim];
+  const [label, f] = { mass:['oz',28.3495], vol:['fl oz',29.5735], count:[t('each'),1] }[n.dim];
   const v = price / n.base * f;
   return '$' + (v < 0.1 ? v.toFixed(3) : v.toFixed(2)) + '/' + label;
 }
 const pkgPrice = it => (typeof it.unitPrice === 'number') ? it.unitPrice : (Number(it.lineTotal) || 0) / (Number(it.qty) || 1);
+const itemName = it => lang === 'zh' ? (it.nameZh || it.name || it.raw) : (it.name || it.raw);
 
 /* ---------- compare ---------- */
 function buildGroups(){
@@ -59,7 +135,7 @@ function buildGroups(){
       }
       if(key.endsWith(':')) continue;
       if(!groups.has(key)) groups.set(key, { key, title, zh, entries:[] });
-      groups.get(key).entries.push({ r, it, storeKey:(r.store || '未知店') + '|' + (r.branch || ''), when:(r.date || '') + '|' + (r.createdAt || '') });
+      groups.get(key).entries.push({ r, it, storeKey:(r.store || '?') + '|' + (r.branch || ''), when:(r.date || '') + '|' + (r.createdAt || '') });
     }
   }
   const out = [];
@@ -75,26 +151,28 @@ function buildGroups(){
     offers.sort((a, b) => allSized ? a.per - b.per : a.price - b.price);
     out.push({ ...g, offers, basis: offers.length < 2 ? 'one' : allSized ? 'unit' : 'pkg' });
   }
-  out.sort((a, b) => (b.offers.length > 1) - (a.offers.length > 1) || String(a.zh || a.title).localeCompare(String(b.zh || b.title), 'zh'));
+  const label = g => String(lang === 'zh' ? (g.zh || g.title) : g.title);
+  out.sort((a, b) => (b.offers.length > 1) - (a.offers.length > 1) || label(a).localeCompare(label(b), lang));
   return out;
 }
-const storeLabel = r => esc(r.store || '未知店') + (r.branch ? ' · ' + esc(String(r.branch).split(',')[0]) : '');
+const storeLabel = r => esc(r.store || t('unknownStore')) + (r.branch ? ' · ' + esc(String(r.branch).split(',')[0]) : '');
 
 function renderCompare(){
   const el = $('#compareList');
-  if(!receipts.length){ el.innerHTML = '<div class="empty">还没有小票。拍一张试试。</div>'; return; }
+  if(!receipts.length){ el.innerHTML = `<div class="empty">${t('emptyCompare')}</div>`; return; }
   const q = query.trim().toLowerCase();
   let gs = buildGroups();
   if(multiOnly) gs = gs.filter(g => g.offers.length > 1);
   if(q) gs = gs.filter(g => (String(g.title) + ' ' + (g.zh || '')).toLowerCase().includes(q));
-  if(!gs.length){ el.innerHTML = '<div class="empty">' + (multiOnly ? '还没有在两家以上店买过的商品。多扫几张不同店的小票就会出现。' : '没有匹配的商品。') + '</div>'; return; }
-  const chip = { unit:'<span class="chip unit">按单价</span>', pkg:'<span class="chip pkg">规格未知 · 仅供参考</span>', one:'<span class="chip one">只有 1 家店</span>' };
+  if(!gs.length){ el.innerHTML = `<div class="empty">${t(multiOnly ? 'emptyMulti' : 'noMatch')}</div>`; return; }
+  const chip = { unit:`<span class="chip unit">${t('chipUnit')}</span>`, pkg:`<span class="chip pkg">${t('chipPkg')}</span>`, one:`<span class="chip one">${t('chipOne')}</span>` };
   el.innerHTML = gs.map(g => {
     const b = g.offers[0], sz = sizeText(b.it.size);
+    const main = lang === 'zh' ? (g.zh || g.title) : g.title, sub = lang === 'zh' && g.zh ? g.title : '';
     const others = g.offers.slice(1).map(o =>
       `<li><span>${storeLabel(o.r)}${sizeText(o.it.size) ? ' · ' + esc(sizeText(o.it.size)) : ''}</span><span class="mono">${money(o.price)}${o.n ? ' · ' + perText(o.price, o.n) : ''}</span></li>`).join('');
     return `<div class="row">
-      <div class="row-head"><div class="pname">${esc(g.zh || g.title)}${g.zh ? `<small>${esc(g.title)}</small>` : ''}</div>${chip[g.basis]}</div>
+      <div class="row-head"><div class="pname">${esc(main)}${sub ? `<small>${esc(sub)}</small>` : ''}</div>${chip[g.basis]}</div>
       <div class="best"><span class="hl">${storeLabel(b.r)}</span><span class="price">${money(b.price)}</span>${sz ? `<span class="per">${esc(sz)}</span>` : ''}${b.n ? `<span class="per">${perText(b.price, b.n)}</span>` : ''}</div>
       ${others ? `<ul class="others">${others}</ul>` : ''}
     </div>`;
@@ -104,25 +182,28 @@ function renderCompare(){
 /* ---------- receipts ---------- */
 function renderReceipts(){
   const el = $('#receiptList');
-  if(!receipts.length){ el.innerHTML = '<div class="list"><div class="empty">还没有小票。</div></div>'; return; }
+  if(!receipts.length){ el.innerHTML = `<div class="list"><div class="empty">${t('noReceipts')}</div></div>`; return; }
   const list = [...receipts].sort((a, b) => String(b.date || b.createdAt || '').localeCompare(String(a.date || a.createdAt || '')));
   el.innerHTML = list.map(r => {
-    const rows = (r.items || []).map(it => `<tr><td>${esc(it.nameZh || it.name)}<div class="sz">${esc(it.name || it.raw)}${sizeText(it.size) ? ' · ' + esc(sizeText(it.size)) : ''}${Number(it.qty) > 1 ? ' · ' + it.qty + ' 件' : ''}${it.memberPrice ? ' · 会员价' : ''}</div></td><td class="mono">${money(Number(it.lineTotal))}</td></tr>`).join('');
+    const rows = (r.items || []).map(it => {
+      const extra = [lang === 'zh' ? (it.name || it.raw) : (it.raw || ''), sizeText(it.size), Number(it.qty) > 1 ? t('qty', it.qty) : '', it.memberPrice ? t('member') : ''].filter(Boolean).join(' · ');
+      return `<tr><td>${esc(itemName(it))}<div class="sz">${esc(extra)}</div></td><td class="mono">${money(Number(it.lineTotal))}</td></tr>`;
+    }).join('');
     const isEdit = editing === r.id;
     return `<article class="card">
       <div class="rcpt-head">
         <div>
-          <div class="rcpt-store">${esc(r.store || '未知店')}${r.storeGuessed ? '<span class="chip guess">店名是推测的</span>' : ''}</div>
-          <div class="meta">${esc(r.branch || '地址未知')} · ${esc(r.date || '日期未知')} · ${(r.items || []).length} 件</div>
+          <div class="rcpt-store">${esc(r.store || t('unknownStore'))}${r.storeGuessed ? `<span class="chip guess">${t('guessed')}</span>` : ''}</div>
+          <div class="meta">${esc(r.branch || t('noAddr'))} · ${esc(r.date || t('noDate'))} · ${t('nItems', (r.items || []).length)}</div>
         </div>
-        <div class="total"><div class="price">${money(Number(r.total))}</div><div class="meta">${typeof r.tax === 'number' && r.tax > 0 ? '含税 ' + money(r.tax) : '无税'}</div></div>
+        <div class="total"><div class="price">${money(Number(r.total))}</div><div class="meta">${typeof r.tax === 'number' && r.tax > 0 ? t('withTax') + money(r.tax) : t('noTax')}</div></div>
       </div>
-      ${isEdit ? `<div class="edit"><input id="storeEdit" value="${esc(r.store || '')}" aria-label="店名"><button data-act="save" data-id="${esc(r.id)}">保存</button><button data-act="cancel">取消</button></div>` : ''}
-      <details><summary>查看商品</summary><table class="items">${rows}</table></details>
+      ${isEdit ? `<div class="edit"><input id="storeEdit" value="${esc(r.store || '')}" aria-label="${t('storeName')}"><button data-act="save" data-id="${esc(r.id)}">${t('save')}</button><button data-act="cancel">${t('cancel')}</button></div>` : ''}
+      <details><summary>${t('showItems')}</summary><table class="items">${rows}</table></details>
       <div class="rcpt-acts">
-        ${r.storeGuessed && !isEdit ? `<button data-act="confirm" data-id="${esc(r.id)}">店名没错</button>` : ''}
-        ${!isEdit ? `<button data-act="edit" data-id="${esc(r.id)}">改店名</button>` : ''}
-        <button class="danger" data-act="del" data-id="${esc(r.id)}">${confirmDel === r.id ? '确认删除？' : '删除'}</button>
+        ${r.storeGuessed && !isEdit ? `<button data-act="confirm" data-id="${esc(r.id)}">${t('nameOk')}</button>` : ''}
+        ${!isEdit ? `<button data-act="edit" data-id="${esc(r.id)}">${t('rename')}</button>` : ''}
+        <button class="danger" data-act="del" data-id="${esc(r.id)}">${confirmDel === r.id ? t('delConfirm') : t('del')}</button>
       </div>
     </article>`;
   }).join('');
@@ -140,24 +221,74 @@ $('#receiptList').addEventListener('click', e => {
   }
 });
 
+/* ---------- keeping data safe ---------- */
+function saveReceipts(){
+  if(!store.set('rp.receipts', receipts)) $('#stats').textContent = t('saveFail');
+  else navigator.storage?.persist?.().catch(() => {});
+  render();
+}
+const unbacked = () => { const at = store.get('rp.backupAt', ''); return receipts.filter(r => !at || String(r.createdAt || '') > at).length; };
+const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isStandalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+function renderTips(){
+  $('#homeTip').hidden = !(isIOS && !isStandalone && !store.get('rp.hideHomeTip', false));
+  const n = unbacked();
+  $('#backupTip').hidden = n < 3;
+  if(n >= 3) $('#backupTipText').textContent = t('backupTip', n);
+}
+$('#homeTipClose').onclick = () => { store.set('rp.hideHomeTip', true); renderTips(); };
+
+async function exportBackup(){
+  const name = t('backupName') + '-' + new Date().toISOString().slice(0, 10) + '.json';
+  const json = JSON.stringify({ app:'receipt-price', version:1, exportedAt:new Date().toISOString(), receipts }, null, 2);
+  const file = new File([json], name, { type:'application/json' });
+  if(navigator.canShare?.({ files:[file] })){
+    try{ await navigator.share({ files:[file], title:name }); store.set('rp.backupAt', new Date().toISOString()); renderTips(); return; }
+    catch(e){ if(e?.name === 'AbortError') return; }
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(file); a.download = name;
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  store.set('rp.backupAt', new Date().toISOString()); renderTips();
+}
+$('#exportBtn').onclick = exportBackup;
+$('#backupTipBtn').onclick = exportBackup;
+$('#importInput').onchange = async e => {
+  const f = e.target.files[0]; e.target.value = ''; if(!f) return;
+  try{
+    const data = JSON.parse(await f.text());
+    const incoming = Array.isArray(data) ? data : data.receipts;
+    if(!Array.isArray(incoming)) throw 0;
+    const have = new Set(receipts.map(r => r.id));
+    let added = 0;
+    for(const r of incoming){
+      if(!r || !Array.isArray(r.items) || (r.id && have.has(r.id))) continue;
+      if(!r.id) r.id = newId();
+      receipts.push(r); have.add(r.id); added++;
+    }
+    saveReceipts();
+    $('#stats').textContent = t('imported', added);
+  }catch{ $('#stats').textContent = t('importFail'); }
+};
+
+/* ---------- page ---------- */
 function render(){
-  const stores = new Set(receipts.map(r => r.store || '未知店'));
+  const stores = new Set(receipts.map(r => r.store || '?'));
   const items = receipts.reduce((n, r) => n + (r.items || []).length, 0);
-  $('#stats').textContent = receipts.length ? `${receipts.length} 张小票 · ${stores.size} 家店 · ${items} 件商品` : '还没有小票';
+  $('#stats').textContent = receipts.length ? t('stats', receipts.length, stores.size, items) : t('noReceipts');
   const hasKey = !!apiKey();
   $('#setup').hidden = hasKey;
   $('#camBtn').classList.toggle('disabled', !hasKey);
   $('#galBtn').classList.toggle('disabled', !hasKey);
-  renderCompare(); renderReceipts();
+  renderTips(); renderCompare(); renderReceipts(); renderQueue();
 }
-
-/* ---------- tabs & controls ---------- */
-function setTab(t){
-  tab = t; store.set('rp.tab', t);
-  $('#tabCompare').setAttribute('aria-selected', t === 'compare');
-  $('#tabReceipts').setAttribute('aria-selected', t === 'receipts');
-  $('#viewCompare').hidden = t !== 'compare';
-  $('#viewReceipts').hidden = t !== 'receipts';
+function setTab(v){
+  tab = v; store.set('rp.tab', v);
+  $('#tabCompare').setAttribute('aria-selected', v === 'compare');
+  $('#tabReceipts').setAttribute('aria-selected', v === 'receipts');
+  $('#viewCompare').hidden = v !== 'compare';
+  $('#viewReceipts').hidden = v !== 'receipts';
 }
 function setMode(m){
   mode = m; store.set('rp.mode', m);
@@ -172,71 +303,48 @@ $('#modeCat').onclick = () => setMode('cat');
 $('#multiOnly').checked = multiOnly;
 $('#multiOnly').onchange = e => { multiOnly = e.target.checked; store.set('rp.multi', multiOnly); renderCompare(); };
 $('#search').oninput = e => { query = e.target.value; renderCompare(); };
+$('#langBtn').onclick = () => { lang = lang === 'zh' ? 'en' : 'zh'; store.set('rp.lang', lang); applyText(); render(); };
 
-/* ---------- settings ---------- */
 const dlg = $('#settings');
 $('#openSettings').onclick = () => { $('#apiKey').value = apiKey(); $('#model').value = model(); dlg.showModal(); };
 dlg.addEventListener('close', () => {
   if(dlg.returnValue !== 'save') return;
-  store.set(KEY_API, $('#apiKey').value.trim());
-  store.set(KEY_MODEL, $('#model').value.trim() || DEFAULT_MODEL);
+  store.set('rp.apiKey', $('#apiKey').value.trim());
+  store.set('rp.model', $('#model').value.trim() || DEFAULT_MODEL);
   render(); pump();
 });
 
-/* ---------- backup ---------- */
-$('#exportBtn').onclick = () => {
-  const blob = new Blob([JSON.stringify({ app:'receipt-price', version:1, exportedAt:new Date().toISOString(), receipts }, null, 2)], { type:'application/json' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = '小票比价备份-' + new Date().toISOString().slice(0, 10) + '.json';
-  document.body.append(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-};
-$('#importInput').onchange = async e => {
-  const f = e.target.files[0]; e.target.value = ''; if(!f) return;
-  try{
-    const data = JSON.parse(await f.text());
-    const incoming = Array.isArray(data) ? data : data.receipts;
-    if(!Array.isArray(incoming)) throw 0;
-    const have = new Set(receipts.map(r => r.id));
-    let added = 0;
-    for(const r of incoming){ if(r && Array.isArray(r.items)){ if(!r.id || have.has(r.id)) { if(have.has(r.id)) continue; r.id = newId(); } receipts.push(r); added++; } }
-    saveReceipts();
-    $('#stats').textContent = `导入了 ${added} 张小票`;
-  }catch{ $('#stats').textContent = '导入失败：这不是小票比价导出的备份文件。'; }
-};
-
-/* ---------- scanning queue ---------- */
-const PROMPT = `图片是一张购物小票。仔细读取，只回复一个 JSON 对象：
+/* ---------- scanning ---------- */
+const PROMPT = `The image is a shopping receipt. Read it carefully and reply with ONE JSON object only:
 {
- "store": "店名。小票上没印店名时，根据地址、门店号、商品风格推断（例如 Trader Joe's），并把 storeGuessed 设为 true",
+ "store": "store name. If the receipt doesn't print it, infer it from the address, store number and item style (e.g. Trader Joe's) and set storeGuessed to true",
  "storeGuessed": false,
- "branch": "门店地址，如 \\"2073 Broadway, New York, NY 10023\\"，没有则 null",
- "date": "YYYY-MM-DD，看不到则 null",
- "subtotal": 数字或 null, "tax": 数字或 null, "total": 数字或 null,
+ "branch": "store address like \\"2073 Broadway, New York, NY 10023\\", or null",
+ "date": "YYYY-MM-DD, or null if not visible",
+ "subtotal": number or null, "tax": number or null, "total": number or null,
  "items": [{
-   "raw": "小票上的原文",
-   "name": "完整英文商品名，补全被截断的词",
-   "nameZh": "简短中文名",
-   "brand": "品牌或 null",
-   "category": "通用品类，英文小写，用于跨品牌比较，如 greek yogurt / disinfecting wipes / frozen spinach",
-   "categoryZh": "品类中文名",
-   "productKey": "精确商品标识：品牌+商品+口味/变体，小写，用短横线连接，不含规格，如 lysol-dual-action-disinfecting-wipes",
-   "upc": "条码数字或 null",
+   "raw": "the line exactly as printed",
+   "name": "full English product name, expanding truncated words",
+   "nameZh": "short Chinese name",
+   "brand": "brand or null",
+   "category": "generic category in lowercase English for cross-brand comparison, e.g. greek yogurt / disinfecting wipes / frozen spinach",
+   "categoryZh": "category in Chinese",
+   "productKey": "exact product id: brand + product + flavor/variant, lowercase, hyphen-joined, WITHOUT size, e.g. lysol-dual-action-disinfecting-wipes",
+   "upc": "barcode digits or null",
    "qty": 1,
-   "lineTotal": 这一行实付金额（扣掉该行折扣，税前）,
-   "unitPrice": 单件价格,
-   "regularPrice": 有折扣时的原价，否则 null,
-   "memberPrice": 是否会员价 true/false,
-   "size": 只有小票上明确印了规格才填 {"value": 数字, "unit": "oz|lb|g|kg|fl oz|ml|l|ct"}，否则 null。"80S"、"75SH"、"4S" 这类表示数量，用 ct。按重量计价（如 1.32 lb @ 2.99/lb）填重量。不要猜。,
+   "lineTotal": amount paid for this line after line discounts, before tax,
+   "unitPrice": price of one unit,
+   "regularPrice": original price if discounted, else null,
+   "memberPrice": true/false,
+   "size": ONLY if the receipt clearly prints it: {"value": number, "unit": "oz|lb|g|kg|fl oz|ml|l|ct"}, else null. Counts like "80S", "75SH", "4S" use ct. For items sold by weight (e.g. 1.32 lb @ 2.99/lb) use the weight. Never guess.,
    "taxable": true/false
  }]
 }
-规则：不要输出卡号、授权码、会员号或任何支付信息。"RETURN VALUE"、小计、税、找零等行不是商品。价格一律税前。如果图片不是小票，返回 {"items": []}。`;
+Rules: never output card numbers, auth codes, member IDs or any payment details. Lines like "RETURN VALUE", subtotal, tax and change are not items. All prices are before tax. If the image is not a receipt, return {"items": []}.`;
 
 async function toJpegBase64(file){
   const bmp = await createImageBitmap(file);
-  const max = 2000, s = Math.min(1, max / Math.max(bmp.width, bmp.height));
+  const s = Math.min(1, 2000 / Math.max(bmp.width, bmp.height));
   const c = document.createElement('canvas');
   c.width = Math.round(bmp.width * s); c.height = Math.round(bmp.height * s);
   c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
@@ -244,7 +352,7 @@ async function toJpegBase64(file){
   return c.toDataURL('image/jpeg', 0.85).split(',')[1];
 }
 
-class ScanError extends Error { constructor(msg, fatal){ super(msg); this.fatal = fatal; } }
+class ScanError extends Error { constructor(key, arg, fatal){ super(key); this.key = key; this.arg = arg; this.fatal = fatal; } }
 async function askGemini(b64){
   let res;
   try{
@@ -256,23 +364,23 @@ async function askGemini(b64){
         generationConfig:{ responseMimeType:'application/json', temperature:0 },
       }),
     });
-  }catch{ throw new ScanError('网络连不上 Gemini，检查网络后点重试。'); }
+  }catch{ throw new ScanError('eNet'); }
   let body = null; try{ body = await res.json(); }catch{}
   if(!res.ok){
     const m = body?.error?.message || '';
-    if(res.status === 400 && /API key/i.test(m)) throw new ScanError('API 密钥无效，到"设置"里重新填。', true);
-    if(res.status === 403) throw new ScanError('API 密钥没有权限，到"设置"里检查。', true);
-    if(res.status === 404) throw new ScanError(`找不到模型 ${model()}，到"设置"里换一个模型名。`, true);
-    if(res.status === 429) throw new ScanError('免费额度暂时用完了（每分钟或每天有上限），过一会儿再点重试。');
-    throw new ScanError('识别失败（' + res.status + '），点重试。');
+    if(res.status === 400 && /API key/i.test(m)) throw new ScanError('eKey', null, true);
+    if(res.status === 403) throw new ScanError('eForbid', null, true);
+    if(res.status === 404) throw new ScanError('eModel', model(), true);
+    if(res.status === 429) throw new ScanError('eQuota');
+    throw new ScanError('eHttp', res.status);
   }
   const text = (body?.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('');
-  if(!text) throw new ScanError(body?.promptFeedback?.blockReason ? '这张图片被拒绝识别，换一张试试。' : '没有返回结果，点重试。');
+  if(!text) throw new ScanError(body?.promptFeedback?.blockReason ? 'eBlocked' : 'eEmpty');
   try{ return JSON.parse(text); }
   catch{
     const a = text.indexOf('{'), b = text.lastIndexOf('}');
     if(a > -1 && b > a){ try{ return JSON.parse(text.slice(a, b + 1)); }catch{} }
-    throw new ScanError('识别结果格式不对，点重试。');
+    throw new ScanError('eFormat');
   }
 }
 
@@ -290,32 +398,32 @@ function clean(p){
       qty, lineTotal:line, unitPrice:num(it.unitPrice) ?? (line != null ? line / qty : null),
       regularPrice:num(it.regularPrice), memberPrice:!!it.memberPrice, size:s, taxable:!!it.taxable };
   }).filter(it => it.name && it.lineTotal != null);
-  return { id:newId(), store:str(p.store) || '未知店', storeGuessed:!!p.storeGuessed, branch:str(p.branch),
+  return { id:newId(), store:str(p.store) || null, storeGuessed:!!p.storeGuessed, branch:str(p.branch),
     date:/^\d{4}-\d{2}-\d{2}$/.test(p.date || '') ? p.date : null,
     subtotal:num(p.subtotal), tax:num(p.tax), total:num(p.total), items, createdAt:new Date().toISOString() };
 }
 
 const jobs = []; let running = 0, jobSeq = 0; const MAX_RUN = 2;
 function addFiles(files){
-  if(!apiKey()){ dlg.showModal(); return; }
-  for(const f of files) jobs.push({ id:++jobSeq, file:f, url:URL.createObjectURL(f), status:'queued', msg:'' });
+  if(!apiKey()){ $('#openSettings').click(); return; }
+  for(const f of files) jobs.push({ id:++jobSeq, file:f, url:URL.createObjectURL(f), status:'queued' });
   renderQueue(); pump();
 }
 $('#camInput').onchange = e => { addFiles([...e.target.files]); e.target.value = ''; };
 $('#galInput').onchange = e => { addFiles([...e.target.files]); e.target.value = ''; };
 
 async function run(job){
-  job.status = 'working'; job.msg = ''; renderQueue();
+  job.status = 'working'; job.err = null; renderQueue();
   try{
     let b64;
-    try{ b64 = await toJpegBase64(job.file); }catch{ throw new ScanError('这张图片打不开，换一张试试。'); }
+    try{ b64 = await toJpegBase64(job.file); }catch{ throw new ScanError('eImage'); }
     const rec = clean(await askGemini(b64) || {});
-    if(!rec.items.length) throw new ScanError('没读到商品，照片可能太糊或不是小票。');
+    if(!rec.items.length) throw new ScanError('eNoItems');
     receipts.push(rec); saveReceipts();
-    job.status = 'done'; job.msg = `${rec.store} · ${rec.items.length} 件 · ${money(rec.total)}`;
+    job.status = 'done'; job.rec = rec;
   }catch(e){
-    job.status = 'error'; job.msg = e instanceof ScanError ? e.message : '识别失败，点重试。';
-    if(e.fatal) jobs.forEach(j => { if(j.status === 'queued'){ j.status = 'error'; j.msg = '已暂停：' + e.message; } });
+    job.status = 'error'; job.err = e instanceof ScanError ? e : new ScanError('eOther');
+    if(job.err.fatal) jobs.forEach(j => { if(j.status === 'queued'){ j.status = 'error'; j.err = job.err; j.pausedBy = true; } });
   }
   renderQueue();
 }
@@ -326,20 +434,25 @@ function pump(){
     running++; run(j).finally(() => { running--; pump(); });
   }
 }
+function jobText(j){
+  if(j.status === 'queued') return t('queued');
+  if(j.status === 'working') return '<span class="spin"></span>' + t('working');
+  if(j.status === 'done') return '✓ ' + esc(`${j.rec.store || t('unknownStore')} · ${t('nItems', j.rec.items.length)} · ${money(j.rec.total)}`);
+  return esc((j.pausedBy ? t('paused') : '') + t(j.err.key, j.err.arg));
+}
 function renderQueue(){
-  const st = { queued:'排队中', working:'<span class="spin"></span>识别中…', done:'✓ ', error:'' };
   $('#queue').innerHTML = jobs.map(j => `<li class="job">
     <img src="${j.url}" alt="">
-    <div class="st ${j.status === 'error' ? 'err' : j.status === 'done' ? 'done' : ''}">${st[j.status]}${esc(j.msg)}</div>
-    <div class="acts">${j.status === 'error' ? `<button data-retry="${j.id}">重试</button>` : ''}${j.status === 'done' || j.status === 'error' ? `<button data-rm="${j.id}">移除</button>` : ''}</div>
+    <div class="st ${j.status === 'error' ? 'err' : j.status === 'done' ? 'done' : ''}">${jobText(j)}</div>
+    <div class="acts">${j.status === 'error' ? `<button data-retry="${j.id}">${t('retry')}</button>` : ''}${j.status === 'done' || j.status === 'error' ? `<button data-rm="${j.id}">${t('remove')}</button>` : ''}</div>
   </li>`).join('');
 }
 $('#queue').addEventListener('click', e => {
   const r = e.target.closest('[data-retry]'), m = e.target.closest('[data-rm]');
-  if(r){ const j = jobs.find(j => j.id == r.dataset.retry); if(j){ j.status = 'queued'; j.msg = ''; renderQueue(); pump(); } }
+  if(r){ const j = jobs.find(j => j.id == r.dataset.retry); if(j){ j.status = 'queued'; j.err = null; j.pausedBy = false; renderQueue(); pump(); } }
   if(m){ const i = jobs.findIndex(j => j.id == m.dataset.rm); if(i > -1){ URL.revokeObjectURL(jobs[i].url); jobs.splice(i, 1); renderQueue(); } }
 });
 window.addEventListener('beforeunload', e => { if(jobs.some(j => j.status === 'queued' || j.status === 'working')){ e.preventDefault(); e.returnValue = ''; } });
 
 /* ---------- boot ---------- */
-setTab(tab); setMode(mode); render();
+applyText(); setTab(tab); setMode(mode); render();

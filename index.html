@@ -31,11 +31,9 @@
 
   <section class="card setup" id="setup" hidden>
     <h2 data-t="setupTitle"></h2>
-    <ol>
-      <li data-t-html="setup1"></li>
-      <li data-t="setup2"></li>
-      <li data-t="setup3"></li>
-    </ol>
+    <p class="hint-strong" data-t="setupIntro"></p>
+    <ul class="opts" id="setupOpts"></ul>
+    <p class="hint-strong" data-t="setupThen"></p>
     <p class="hint" data-t="keyLocal"></p>
   </section>
 
@@ -93,9 +91,16 @@
 <dialog id="settings">
   <form method="dialog" class="settings-form">
     <h2 data-t="settings"></h2>
+    <label for="provider" data-t="providerLabel"></label>
+    <select id="provider"></select>
+    <p class="hint" id="providerNote"></p>
     <label for="apiKey" data-t="apiKeyLabel"></label>
-    <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="AIza…">
-    <p class="hint" data-t-html="apiKeyHint"></p>
+    <input id="apiKey" type="password" autocomplete="off" spellcheck="false">
+    <p class="hint" id="keyHint"></p>
+    <div id="baseWrap">
+      <label for="baseUrl" data-t="baseLabel"></label>
+      <input id="baseUrl" type="url" spellcheck="false" autocapitalize="off" placeholder="https://…/v1">
+    </div>
     <label for="model" data-t="modelLabel"></label>
     <input id="model" type="text" spellcheck="false" autocapitalize="off">
     <p class="hint" data-t="modelHint"></p>

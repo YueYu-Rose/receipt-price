@@ -8,22 +8,45 @@ const store = {
   get(k, d){ try{ const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); }catch{ return d; } },
   set(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); return true; }catch{ return false; } },
 };
-const DEFAULT_MODEL = 'gemini-2.5-flash';
+/* AI services. Every user brings their own key; calls go straight from the browser to the provider. */
+const PROVIDERS = {
+  gemini:     { label:'Google Gemini', kind:'gemini', model:'gemini-2.5-flash', keyUrl:'https://aistudio.google.com/apikey', free:true,
+                note:{ zh:'免费额度，需要能访问 Google', en:'Free tier; needs access to Google' } },
+  openrouter: { label:'OpenRouter', kind:'openai', base:'https://openrouter.ai/api/v1', model:'openrouter/free', keyUrl:'https://openrouter.ai/keys', free:true,
+                note:{ zh:'有免费模型（openrouter/free 会自动挑一个支持图片的免费模型）', en:'Free models available (openrouter/free picks a free image-capable one)' } },
+  zhipu:      { label:'智谱 GLM (Zhipu)', kind:'openai', base:'https://open.bigmodel.cn/api/paas/v4', model:'glm-4v-flash', keyUrl:'https://open.bigmodel.cn/usercenter/apikeys', free:true, rawB64:true,
+                note:{ zh:'GLM-4V-Flash 免费，国内可直接使用', en:'GLM-4V-Flash is free; works in mainland China' } },
+  qwen:       { label:'阿里云百炼 Qwen (Alibaba)', kind:'openai', base:'https://dashscope.aliyuncs.com/compatible-mode/v1', model:'qwen-vl-plus', keyUrl:'https://bailian.console.aliyun.com/',
+                note:{ zh:'新用户有免费额度，之后按量付费', en:'Free credit for new users, then pay as you go' } },
+  openai:     { label:'OpenAI', kind:'openai', base:'https://api.openai.com/v1', model:'gpt-5-mini', keyUrl:'https://platform.openai.com/api-keys',
+                note:{ zh:'付费，按量计费', en:'Paid, pay as you go' } },
+  anthropic:  { label:'Anthropic Claude', kind:'anthropic', model:'claude-haiku-4-5', keyUrl:'https://console.anthropic.com/settings/keys',
+                note:{ zh:'付费，按量计费', en:'Paid, pay as you go' } },
+  custom:     { label:'Other (OpenAI-compatible)', kind:'openai', base:'', model:'', keyUrl:'',
+                note:{ zh:'任何兼容 OpenAI 接口、支持图片的服务，自己填接口地址和模型名', en:'Any OpenAI-compatible service with image input; enter its base URL and model' } },
+};
+const ai = (() => {
+  const s = store.get('rp.ai', null) || { provider:'gemini', keys:{}, models:{}, base:'' };
+  const oldKey = store.get('rp.apiKey', ''); // migrate the Gemini-only version
+  if(oldKey && !s.keys.gemini){ s.keys.gemini = oldKey; const m = store.get('rp.model', ''); if(m) s.models.gemini = m; }
+  return s;
+})();
 let receipts = store.get('rp.receipts', []);
 let mode = store.get('rp.mode', 'exact'), multiOnly = store.get('rp.multi', false), tab = store.get('rp.tab', 'compare');
 let lang = store.get('rp.lang', /^zh/i.test(navigator.language || '') ? 'zh' : 'en');
 let query = '', editing = null, confirmDel = null;
-const apiKey = () => store.get('rp.apiKey', '');
-const model = () => store.get('rp.model', '') || DEFAULT_MODEL;
+const prov = () => PROVIDERS[ai.provider] || PROVIDERS.gemini;
+const apiKey = () => ai.keys[ai.provider] || '';
+const model = () => ai.models[ai.provider] || prov().model;
+const baseUrl = () => (ai.provider === 'custom' ? ai.base : prov().base || '').replace(/\/+$/, '');
 const newId = () => 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
 /* ---------- text ---------- */
 const T = {
   zh: {
     appName:'小票比价', settings:'设置', langBtn:'EN',
-    setupTitle:'第一步：填入免费的 Gemini API 密钥',
-    setup1:'打开 <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a>，用 Google 账号登录',
-    setup2:'点 "Create API key"，复制生成的密钥', setup3:'点右上角"设置"，粘贴进去保存',
+    setupTitle:'第一步：选一个 AI 服务，填入你自己的密钥',
+    setupIntro:'这几个有免费额度，任选一个申请密钥：', setupThen:'然后点右上角"设置"，选服务、粘贴密钥、保存。',
     keyLocal:'密钥只保存在这台设备的浏览器里，不会上传到别的地方。每个人用自己的密钥，额度各算各的。',
     homeTip:'建议在 Safari 点「分享」→「添加到主屏幕」，以后从主屏幕图标打开。否则如果 7 天没打开这个网站，Safari 可能会自动清除你的小票数据。',
     gotIt:'知道了',
@@ -42,9 +65,10 @@ const T = {
     guessed:'店名是推测的', noAddr:'地址未知', noDate:'日期未知', nItems:n => `${n} 件`, qty:n => `${n} 件`, member:'会员价',
     withTax:'含税 ', noTax:'无税', showItems:'查看商品', nameOk:'店名没错', rename:'改店名', del:'删除', delConfirm:'确认删除？',
     save:'保存', cancel:'取消', storeName:'店名', unknownStore:'未知店',
-    apiKeyLabel:'Gemini API 密钥', apiKeyHint:'在 <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> 免费申请。只保存在这台设备上。',
-    modelLabel:'模型', modelHint:'默认 gemini-2.5-flash。如果提示模型不存在，可以换成 AI Studio 里列出的其他 Flash 模型。',
-    privacyNote:'注意：Gemini 免费版上传的内容可能会被 Google 用来改进产品。拍照时可以把卡号那部分挡住。',
+    providerLabel:'AI 服务', apiKeyLabel:'API 密钥', keyHint:u => `在 <a href="${u}" target="_blank" rel="noopener">这里</a>申请。密钥只保存在这台设备上。`,
+    baseLabel:'接口地址（OpenAI 兼容）', modelLabel:'模型', modelHint:'已填好推荐的模型。如果提示模型不存在，换成服务商后台列出的、支持图片的模型名。',
+    privacyNote:'注意：小票照片会发给你选的 AI 服务商。免费服务的内容可能被服务商用来改进模型。拍照时可以把卡号那部分挡住。',
+    eCredit:'账户余额或额度不足，到服务商后台充值或换一个服务。', eCors:'连不上这个服务：可能网络不通，或者它不允许网页直接调用。换一个服务试试。',
     saveFail:'保存失败：浏览器存储已满或被禁用。先导出备份。',
     imported:n => `导入了 ${n} 张小票`, importFail:'导入失败：这不是小票比价导出的备份文件。',
     queued:'排队中', working:'识别中…', paused:'已暂停：',
@@ -56,9 +80,8 @@ const T = {
   },
   en: {
     appName:'Receipt Price', settings:'Settings', langBtn:'中文',
-    setupTitle:'Step 1: add a free Gemini API key',
-    setup1:'Open <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a> and sign in with a Google account',
-    setup2:'Tap "Create API key" and copy the key', setup3:'Tap Settings (top right), paste it and save',
+    setupTitle:'Step 1: pick an AI service and add your own key',
+    setupIntro:'These have free tiers. Get a key from any one:', setupThen:'Then tap Settings (top right), choose the service, paste the key and save.',
     keyLocal:'Your key stays in this browser on this device and is never sent anywhere else. Everyone uses their own key and their own free quota.',
     homeTip:'Tip: in Safari, tap Share → Add to Home Screen and open the app from that icon. Otherwise Safari may clear your receipts if you don\'t open this site for 7 days.',
     gotIt:'Got it',
@@ -77,9 +100,10 @@ const T = {
     guessed:'Store name guessed', noAddr:'Unknown address', noDate:'Unknown date', nItems:n => `${n} items`, qty:n => `qty ${n}`, member:'member price',
     withTax:'incl. tax ', noTax:'no tax', showItems:'Show items', nameOk:'Name is right', rename:'Rename store', del:'Delete', delConfirm:'Delete for good?',
     save:'Save', cancel:'Cancel', storeName:'Store name', unknownStore:'Unknown store',
-    apiKeyLabel:'Gemini API key', apiKeyHint:'Get one free at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>. Stored on this device only.',
-    modelLabel:'Model', modelHint:'Default is gemini-2.5-flash. If you get a "model not found" error, try another Flash model listed in AI Studio.',
-    privacyNote:'Note: on Gemini\'s free tier, Google may use what you upload to improve its products. You can cover your card number when taking the photo.',
+    providerLabel:'AI service', apiKeyLabel:'API key', keyHint:u => `Get one <a href="${u}" target="_blank" rel="noopener">here</a>. Stored on this device only.`,
+    baseLabel:'Base URL (OpenAI-compatible)', modelLabel:'Model', modelHint:'A suggested model is filled in. If you see "model not found", use an image-capable model name from your provider\'s dashboard.',
+    privacyNote:'Note: receipt photos are sent to the AI service you pick. Free tiers may use your content to improve their models. You can cover your card number when taking the photo.',
+    eCredit:'Out of credit or quota. Top up with the provider or pick another service.', eCors:'Can\'t reach this service: the network may be blocked, or it doesn\'t allow calls from web pages. Try another service.',
     saveFail:'Could not save: browser storage is full or blocked. Export a backup first.',
     imported:n => `Imported ${n} receipts`, importFail:'Import failed: this isn\'t a Receipt Price backup file.',
     queued:'Queued', working:'Reading…', paused:'Paused: ',
@@ -97,6 +121,7 @@ function applyText(){
   document.querySelectorAll('[data-t-html]').forEach(el => el.innerHTML = t(el.dataset.tHtml));
   $('#langBtn').textContent = t('langBtn');
   $('#search').placeholder = t('search');
+  if(typeof renderSetupOpts === 'function') renderSetupOpts();
 }
 
 /* ---------- units ---------- */
@@ -306,13 +331,43 @@ $('#search').oninput = e => { query = e.target.value; renderCompare(); };
 $('#langBtn').onclick = () => { lang = lang === 'zh' ? 'en' : 'zh'; store.set('rp.lang', lang); applyText(); render(); };
 
 const dlg = $('#settings');
-$('#openSettings').onclick = () => { $('#apiKey').value = apiKey(); $('#model').value = model(); dlg.showModal(); };
+let draft = null; // edits in the dialog, kept per service until Save
+function fillProviderFields(){
+  const id = $('#provider').value, p = PROVIDERS[id];
+  $('#providerNote').textContent = p.note[lang];
+  $('#keyHint').innerHTML = p.keyUrl ? t('keyHint', p.keyUrl) : '';
+  $('#apiKey').value = draft.keys[id] || '';
+  $('#model').value = draft.models[id] || p.model;
+  $('#model').placeholder = p.model || 'model-name';
+  $('#baseWrap').hidden = id !== 'custom';
+  $('#baseUrl').value = draft.base || '';
+}
+function keepDraft(){
+  const id = draft.provider;
+  draft.keys[id] = $('#apiKey').value.trim();
+  const m = $('#model').value.trim();
+  if(m && m !== PROVIDERS[id].model) draft.models[id] = m; else delete draft.models[id];
+  if(id === 'custom') draft.base = $('#baseUrl').value.trim();
+}
+$('#provider').innerHTML = Object.entries(PROVIDERS).map(([id, p]) => `<option value="${id}">${esc(p.label)}</option>`).join('');
+$('#provider').onchange = () => { keepDraft(); draft.provider = $('#provider').value; fillProviderFields(); };
+$('#openSettings').onclick = () => {
+  draft = JSON.parse(JSON.stringify(ai));
+  $('#provider').value = draft.provider;
+  fillProviderFields(); dlg.showModal();
+};
 dlg.addEventListener('close', () => {
-  if(dlg.returnValue !== 'save') return;
-  store.set('rp.apiKey', $('#apiKey').value.trim());
-  store.set('rp.model', $('#model').value.trim() || DEFAULT_MODEL);
+  if(dlg.returnValue !== 'save' || !draft) return;
+  keepDraft();
+  Object.assign(ai, draft); store.set('rp.ai', ai);
+  // earlier failures may have been caused by the old settings
+  jobs.forEach(j => { if(j.status === 'error' && j.err?.fatal){ j.status = 'queued'; j.err = null; j.pausedBy = false; } });
   render(); pump();
 });
+function renderSetupOpts(){
+  $('#setupOpts').innerHTML = Object.values(PROVIDERS).filter(p => p.free).map(p =>
+    `<li><a href="${p.keyUrl}" target="_blank" rel="noopener"><b>${esc(p.label)}</b></a> <span>${esc(p.note[lang])}</span></li>`).join('');
+}
 
 /* ---------- scanning ---------- */
 const PROMPT = `The image is a shopping receipt. Read it carefully and reply with ONE JSON object only:
@@ -353,29 +408,53 @@ async function toJpegBase64(file){
 }
 
 class ScanError extends Error { constructor(key, arg, fatal){ super(key); this.key = key; this.arg = arg; this.fatal = fatal; } }
-async function askGemini(b64){
+function buildRequest(b64){
+  const p = prov(), key = apiKey(), m = model();
+  if(p.kind === 'gemini') return {
+    url:`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(m)}:generateContent`,
+    headers:{ 'Content-Type':'application/json', 'x-goog-api-key':key },
+    body:{ contents:[{ parts:[ { inline_data:{ mime_type:'image/jpeg', data:b64 } }, { text:PROMPT } ] }],
+           generationConfig:{ responseMimeType:'application/json', temperature:0 } },
+    read:j => (j?.candidates?.[0]?.content?.parts || []).map(x => x.text || '').join(''),
+    blocked:j => !!j?.promptFeedback?.blockReason,
+  };
+  if(p.kind === 'anthropic') return {
+    url:'https://api.anthropic.com/v1/messages',
+    headers:{ 'Content-Type':'application/json', 'x-api-key':key, 'anthropic-version':'2023-06-01', 'anthropic-dangerous-direct-browser-access':'true' },
+    body:{ model:m, max_tokens:8000, messages:[{ role:'user', content:[
+      { type:'image', source:{ type:'base64', media_type:'image/jpeg', data:b64 } }, { type:'text', text:PROMPT } ] }] },
+    read:j => (j?.content || []).map(x => x.text || '').join(''),
+    blocked:j => j?.stop_reason === 'refusal',
+  };
+  const headers = { 'Content-Type':'application/json', 'Authorization':'Bearer ' + key };
+  if(ai.provider === 'openrouter') headers['X-Title'] = 'Receipt Price';
+  return {
+    url:baseUrl() + '/chat/completions', headers,
+    body:{ model:m, messages:[{ role:'user', content:[
+      { type:'text', text:PROMPT },
+      { type:'image_url', image_url:{ url:p.rawB64 ? b64 : 'data:image/jpeg;base64,' + b64 } } ] }] },
+    read:j => { const c = j?.choices?.[0]?.message?.content; return Array.isArray(c) ? c.map(x => x.text || '').join('') : (c || ''); },
+    blocked:j => j?.choices?.[0]?.finish_reason === 'content_filter',
+  };
+}
+async function askAI(b64){
+  if(ai.provider === 'custom' && !/^https:\/\//.test(baseUrl())) throw new ScanError('eCors', null, true);
+  const req = buildRequest(b64);
   let res;
-  try{
-    res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model())}:generateContent`, {
-      method:'POST',
-      headers:{ 'Content-Type':'application/json', 'x-goog-api-key':apiKey() },
-      body:JSON.stringify({
-        contents:[{ parts:[ { inline_data:{ mime_type:'image/jpeg', data:b64 } }, { text:PROMPT } ] }],
-        generationConfig:{ responseMimeType:'application/json', temperature:0 },
-      }),
-    });
-  }catch{ throw new ScanError('eNet'); }
+  try{ res = await fetch(req.url, { method:'POST', headers:req.headers, body:JSON.stringify(req.body) }); }
+  catch{ throw new ScanError(navigator.onLine === false ? 'eNet' : 'eCors'); }
   let body = null; try{ body = await res.json(); }catch{}
   if(!res.ok){
-    const m = body?.error?.message || '';
-    if(res.status === 400 && /API key/i.test(m)) throw new ScanError('eKey', null, true);
+    const msg = JSON.stringify(body?.error ?? body ?? '').toLowerCase();
+    if(res.status === 401 || (res.status === 400 && /api.?key|invalid.*key|authentication/.test(msg))) throw new ScanError('eKey', null, true);
+    if(res.status === 402 || /insufficient|balance|credit|余额/.test(msg)) throw new ScanError('eCredit', null, true);
     if(res.status === 403) throw new ScanError('eForbid', null, true);
-    if(res.status === 404) throw new ScanError('eModel', model(), true);
-    if(res.status === 429) throw new ScanError('eQuota');
+    if(res.status === 404 || /model.*(not.?found|not.?exist|does not exist)|模型不存在/.test(msg)) throw new ScanError('eModel', model(), true);
+    if(res.status === 429 || res.status === 529) throw new ScanError('eQuota');
     throw new ScanError('eHttp', res.status);
   }
-  const text = (body?.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('');
-  if(!text) throw new ScanError(body?.promptFeedback?.blockReason ? 'eBlocked' : 'eEmpty');
+  const text = req.read(body);
+  if(!text) throw new ScanError(req.blocked(body) ? 'eBlocked' : 'eEmpty');
   try{ return JSON.parse(text); }
   catch{
     const a = text.indexOf('{'), b = text.lastIndexOf('}');
@@ -417,7 +496,7 @@ async function run(job){
   try{
     let b64;
     try{ b64 = await toJpegBase64(job.file); }catch{ throw new ScanError('eImage'); }
-    const rec = clean(await askGemini(b64) || {});
+    const rec = clean(await askAI(b64) || {});
     if(!rec.items.length) throw new ScanError('eNoItems');
     receipts.push(rec); saveReceipts();
     job.status = 'done'; job.rec = rec;

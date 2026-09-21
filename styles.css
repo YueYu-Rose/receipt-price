@@ -111,3 +111,9 @@ dialog::backdrop{background:rgba(0,0,0,.4)}
 .notice-bar button{flex:none;font-size:13px;padding:7px 12px;background:transparent;color:var(--warn);border-color:currentColor}
 .notice-bar button.solid{background:var(--warn);color:var(--warn-bg);border-color:var(--warn);font-weight:600}
 .foot{text-align:center;font-size:12.5px;color:var(--muted);padding-top:8px}
+.settings-form select{font:inherit;padding:9px 11px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink)}
+#baseWrap{display:flex;flex-direction:column;gap:8px}
+.hint-strong{margin:0;font-size:14px}
+.opts{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px;font-size:14px}
+.opts b{font-weight:600}
+.opts span{color:var(--muted);font-size:12.5px}

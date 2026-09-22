@@ -10,7 +10,7 @@ const store = {
 };
 /* AI services. Every user brings their own key; calls go straight from the browser to the provider. */
 const PROVIDERS = {
-  gemini:     { label:'Google Gemini', kind:'gemini', model:'gemini-2.5-flash', keyUrl:'https://aistudio.google.com/apikey', free:true,
+  gemini:     { label:'Google Gemini', kind:'gemini', model:'gemini-flash-latest', keyUrl:'https://aistudio.google.com/apikey', free:true,
                 note:{ zh:'免费额度，需要能访问 Google', en:'Free tier; needs access to Google' } },
   openrouter: { label:'OpenRouter', kind:'openai', base:'https://openrouter.ai/api/v1', model:'openrouter/free', keyUrl:'https://openrouter.ai/keys', free:true,
                 note:{ zh:'有免费模型（openrouter/free 会自动挑一个支持图片的免费模型）', en:'Free models available (openrouter/free picks a free image-capable one)' } },
@@ -73,10 +73,10 @@ const T = {
     imported:n => `导入了 ${n} 张小票`, importFail:'导入失败：这不是小票比价导出的备份文件。',
     queued:'排队中', working:'识别中…', paused:'已暂停：',
     eNet:'网络连不上 Gemini，检查网络后点重试。', eKey:'API 密钥无效，到"设置"里重新填。', eForbid:'API 密钥没有权限，到"设置"里检查。',
-    eModel:m => `找不到模型 ${m}，到"设置"里换一个模型名。`, eQuota:'免费额度暂时用完了（每分钟或每天有上限），过一会儿再点重试。',
+    eModel:m => `找不到模型 ${m}（服务商可能已经下线了这个版本），到"设置"里换一个模型名，比如 Gemini 可以填 gemini-flash-latest。`, eQuota:'免费额度暂时用完了（每分钟或每天有上限），过一会儿再点重试。',
     eHttp:c => `识别失败（${c}），点重试。`, eBlocked:'这张图片被拒绝识别，换一张试试。', eEmpty:'没有返回结果，点重试。',
     eFormat:'识别结果格式不对，点重试。', eImage:'这张图片打不开，换一张试试。', eNoItems:'没读到商品，照片可能太糊或不是小票。', eOther:'识别失败，点重试。',
-    retry:'重试', remove:'移除', backupName:'小票比价备份',
+    retry:'重试', remove:'移除', backupName:'小票比价备份', retryAll:n => `全部重试（${n} 张）`,
   },
   en: {
     appName:'Receipt Price', settings:'Settings', langBtn:'中文',
@@ -108,10 +108,10 @@ const T = {
     imported:n => `Imported ${n} receipts`, importFail:'Import failed: this isn\'t a Receipt Price backup file.',
     queued:'Queued', working:'Reading…', paused:'Paused: ',
     eNet:'Can\'t reach Gemini. Check your connection and tap Retry.', eKey:'Invalid API key. Update it in Settings.', eForbid:'This API key isn\'t allowed. Check it in Settings.',
-    eModel:m => `Model ${m} not found. Change the model name in Settings.`, eQuota:'Free quota used up for now (there are per-minute and per-day limits). Wait a bit and tap Retry.',
+    eModel:m => `Model ${m} not found (the provider may have retired this version). Change the model name in Settings — for Gemini try gemini-flash-latest.`, eQuota:'Free quota used up for now (there are per-minute and per-day limits). Wait a bit and tap Retry.',
     eHttp:c => `Reading failed (${c}). Tap Retry.`, eBlocked:'This image was refused. Try another photo.', eEmpty:'No result came back. Tap Retry.',
     eFormat:'The result was malformed. Tap Retry.', eImage:'Can\'t open this image. Try another one.', eNoItems:'No items found. The photo may be blurry or not a receipt.', eOther:'Reading failed. Tap Retry.',
-    retry:'Retry', remove:'Remove', backupName:'receipt-price-backup',
+    retry:'Retry', remove:'Remove', backupName:'receipt-price-backup', retryAll:n => `Retry all (${n})`,
   },
 };
 const t = (k, ...a) => { const v = T[lang][k]; return typeof v === 'function' ? v(...a) : v; };
@@ -519,16 +519,21 @@ function jobText(j){
   if(j.status === 'done') return '✓ ' + esc(`${j.rec.store || t('unknownStore')} · ${t('nItems', j.rec.items.length)} · ${money(j.rec.total)}`);
   return esc((j.pausedBy ? t('paused') : '') + t(j.err.key, j.err.arg));
 }
+function retryJob(j){ j.status = 'queued'; j.err = null; j.pausedBy = false; }
 function renderQueue(){
   $('#queue').innerHTML = jobs.map(j => `<li class="job">
     <img src="${j.url}" alt="">
     <div class="st ${j.status === 'error' ? 'err' : j.status === 'done' ? 'done' : ''}">${jobText(j)}</div>
     <div class="acts">${j.status === 'error' ? `<button data-retry="${j.id}">${t('retry')}</button>` : ''}${j.status === 'done' || j.status === 'error' ? `<button data-rm="${j.id}">${t('remove')}</button>` : ''}</div>
   </li>`).join('');
+  const errCount = jobs.filter(j => j.status === 'error').length;
+  $('#retryAll').hidden = errCount < 2;
+  if(errCount >= 2) $('#retryAll').textContent = t('retryAll', errCount);
 }
+$('#retryAll').onclick = () => { jobs.forEach(j => { if(j.status === 'error') retryJob(j); }); renderQueue(); pump(); };
 $('#queue').addEventListener('click', e => {
   const r = e.target.closest('[data-retry]'), m = e.target.closest('[data-rm]');
-  if(r){ const j = jobs.find(j => j.id == r.dataset.retry); if(j){ j.status = 'queued'; j.err = null; j.pausedBy = false; renderQueue(); pump(); } }
+  if(r){ const j = jobs.find(j => j.id == r.dataset.retry); if(j){ retryJob(j); renderQueue(); pump(); } }
   if(m){ const i = jobs.findIndex(j => j.id == m.dataset.rm); if(i > -1){ URL.revokeObjectURL(jobs[i].url); jobs.splice(i, 1); renderQueue(); } }
 });
 window.addEventListener('beforeunload', e => { if(jobs.some(j => j.status === 'queued' || j.status === 'working')){ e.preventDefault(); e.returnValue = ''; } });

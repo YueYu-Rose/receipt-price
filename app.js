@@ -72,11 +72,12 @@ const T = {
     saveFail:'保存失败：浏览器存储已满或被禁用。先导出备份。',
     imported:n => `导入了 ${n} 张小票`, importFail:'导入失败：这不是小票比价导出的备份文件。',
     queued:'排队中', working:'识别中…', paused:'已暂停：',
-    eNet:'网络连不上 Gemini，检查网络后点重试。', eKey:'API 密钥无效，到"设置"里重新填。', eForbid:'API 密钥没有权限，到"设置"里检查。',
+    eNet:'网络连不上，检查网络后点重试。', eKey:'API 密钥无效，到"设置"里重新填。', eForbid:'API 密钥没有权限，到"设置"里检查。',
     eModel:m => `找不到模型 ${m}（服务商可能已经下线了这个版本），到"设置"里换一个模型名，比如 Gemini 可以填 gemini-flash-latest。`, eQuota:'免费额度暂时用完了（每分钟或每天有上限），过一会儿再点重试。',
     eHttp:c => `识别失败（${c}），点重试。`, eBlocked:'这张图片被拒绝识别，换一张试试。', eEmpty:'没有返回结果，点重试。',
     eFormat:'识别结果格式不对，点重试。', eImage:'这张图片打不开，换一张试试。', eNoItems:'没读到商品，照片可能太糊或不是小票。', eOther:'识别失败，点重试。',
-    retry:'重试', remove:'移除', backupName:'小票比价备份', retryAll:n => `全部重试（${n} 张）`,
+    retry:'重试', retryNow:'立即重试', remove:'移除', backupName:'小票比价备份', retryAll:n => `全部重试（${n} 张）`,
+    autoRetry:(n, max) => `遇到临时错误（服务繁忙或额度紧张），正在自动重试（第 ${n}/${max} 次）…`,
   },
   en: {
     appName:'Receipt Price', settings:'Settings', langBtn:'中文',
@@ -107,11 +108,12 @@ const T = {
     saveFail:'Could not save: browser storage is full or blocked. Export a backup first.',
     imported:n => `Imported ${n} receipts`, importFail:'Import failed: this isn\'t a Receipt Price backup file.',
     queued:'Queued', working:'Reading…', paused:'Paused: ',
-    eNet:'Can\'t reach Gemini. Check your connection and tap Retry.', eKey:'Invalid API key. Update it in Settings.', eForbid:'This API key isn\'t allowed. Check it in Settings.',
+    eNet:'Can\'t reach the network. Check your connection and tap Retry.', eKey:'Invalid API key. Update it in Settings.', eForbid:'This API key isn\'t allowed. Check it in Settings.',
     eModel:m => `Model ${m} not found (the provider may have retired this version). Change the model name in Settings — for Gemini try gemini-flash-latest.`, eQuota:'Free quota used up for now (there are per-minute and per-day limits). Wait a bit and tap Retry.',
     eHttp:c => `Reading failed (${c}). Tap Retry.`, eBlocked:'This image was refused. Try another photo.', eEmpty:'No result came back. Tap Retry.',
     eFormat:'The result was malformed. Tap Retry.', eImage:'Can\'t open this image. Try another one.', eNoItems:'No items found. The photo may be blurry or not a receipt.', eOther:'Reading failed. Tap Retry.',
-    retry:'Retry', remove:'Remove', backupName:'receipt-price-backup', retryAll:n => `Retry all (${n})`,
+    retry:'Retry', retryNow:'Retry now', remove:'Remove', backupName:'receipt-price-backup', retryAll:n => `Retry all (${n})`,
+    autoRetry:(n, max) => `Temporary hiccup (busy service or rate limit) — auto-retrying (${n}/${max})…`,
   },
 };
 const t = (k, ...a) => { const v = T[lang][k]; return typeof v === 'function' ? v(...a) : v; };
@@ -407,7 +409,7 @@ async function toJpegBase64(file){
   return c.toDataURL('image/jpeg', 0.85).split(',')[1];
 }
 
-class ScanError extends Error { constructor(key, arg, fatal){ super(key); this.key = key; this.arg = arg; this.fatal = fatal; } }
+class ScanError extends Error { constructor(key, arg, fatal, retryable){ super(key); this.key = key; this.arg = arg; this.fatal = fatal; this.retryable = retryable; } }
 function buildRequest(b64){
   const p = prov(), key = apiKey(), m = model();
   if(p.kind === 'gemini') return {
@@ -442,7 +444,7 @@ async function askAI(b64){
   const req = buildRequest(b64);
   let res;
   try{ res = await fetch(req.url, { method:'POST', headers:req.headers, body:JSON.stringify(req.body) }); }
-  catch{ throw new ScanError(navigator.onLine === false ? 'eNet' : 'eCors'); }
+  catch{ throw new ScanError(navigator.onLine === false ? 'eNet' : 'eCors', null, false, navigator.onLine === false); }
   let body = null; try{ body = await res.json(); }catch{}
   if(!res.ok){
     const msg = JSON.stringify(body?.error ?? body ?? '').toLowerCase();
@@ -450,8 +452,9 @@ async function askAI(b64){
     if(res.status === 402 || /insufficient|balance|credit|余额/.test(msg)) throw new ScanError('eCredit', null, true);
     if(res.status === 403) throw new ScanError('eForbid', null, true);
     if(res.status === 404 || /model.*(not.?found|not.?exist|does not exist)|模型不存在/.test(msg)) throw new ScanError('eModel', model(), true);
-    if(res.status === 429 || res.status === 529) throw new ScanError('eQuota');
-    throw new ScanError('eHttp', res.status);
+    if(res.status === 429 || res.status === 529) throw new ScanError('eQuota', null, false, true);
+    // 5xx = the provider's own servers are struggling (overloaded/down) — worth an automatic retry
+    throw new ScanError('eHttp', res.status, false, res.status >= 500);
   }
   const text = req.read(body);
   if(!text) throw new ScanError(req.blocked(body) ? 'eBlocked' : 'eEmpty');
@@ -482,10 +485,13 @@ function clean(p){
     subtotal:num(p.subtotal), tax:num(p.tax), total:num(p.total), items, createdAt:new Date().toISOString() };
 }
 
-const jobs = []; let running = 0, jobSeq = 0; const MAX_RUN = 2;
+const jobs = []; let running = 0, jobSeq = 0; const MAX_RUN = 2, MAX_AUTO_RETRIES = 5;
+// Free-tier services rate-limit per minute; a burst of uploads trips that, not a real problem.
+// Back off with jitter so retries spread out instead of re-hitting the limit together.
+const backoffMs = attempt => Math.min(30000, 1500 * 2 ** (attempt - 1)) + Math.random() * 1000;
 function addFiles(files){
   if(!apiKey()){ $('#openSettings').click(); return; }
-  for(const f of files) jobs.push({ id:++jobSeq, file:f, url:URL.createObjectURL(f), status:'queued' });
+  for(const f of files) jobs.push({ id:++jobSeq, file:f, url:URL.createObjectURL(f), status:'queued', autoAttempts:0 });
   renderQueue(); pump();
 }
 $('#camInput').onchange = e => { addFiles([...e.target.files]); e.target.value = ''; };
@@ -499,10 +505,16 @@ async function run(job){
     const rec = clean(await askAI(b64) || {});
     if(!rec.items.length) throw new ScanError('eNoItems');
     receipts.push(rec); saveReceipts();
-    job.status = 'done'; job.rec = rec;
+    job.status = 'done'; job.rec = rec; job.err = null;
   }catch(e){
-    job.status = 'error'; job.err = e instanceof ScanError ? e : new ScanError('eOther');
-    if(job.err.fatal) jobs.forEach(j => { if(j.status === 'queued'){ j.status = 'error'; j.err = job.err; j.pausedBy = true; } });
+    const err = e instanceof ScanError ? e : new ScanError('eOther');
+    if(err.retryable && !err.fatal && job.autoAttempts < MAX_AUTO_RETRIES){
+      job.autoAttempts++; job.status = 'waiting'; job.err = err;
+      job.timer = setTimeout(() => { if(job.status === 'waiting'){ job.status = 'queued'; job.err = null; renderQueue(); pump(); } }, backoffMs(job.autoAttempts));
+    } else {
+      job.status = 'error'; job.err = err;
+      if(err.fatal) jobs.forEach(j => { if(j.status === 'queued' || j.status === 'waiting'){ clearTimeout(j.timer); j.status = 'error'; j.err = err; j.pausedBy = true; } });
+    }
   }
   renderQueue();
 }
@@ -517,14 +529,15 @@ function jobText(j){
   if(j.status === 'queued') return t('queued');
   if(j.status === 'working') return '<span class="spin"></span>' + t('working');
   if(j.status === 'done') return '✓ ' + esc(`${j.rec.store || t('unknownStore')} · ${t('nItems', j.rec.items.length)} · ${money(j.rec.total)}`);
+  if(j.status === 'waiting') return '<span class="spin"></span>' + esc(t('autoRetry', j.autoAttempts, MAX_AUTO_RETRIES));
   return esc((j.pausedBy ? t('paused') : '') + t(j.err.key, j.err.arg));
 }
-function retryJob(j){ j.status = 'queued'; j.err = null; j.pausedBy = false; }
+function retryJob(j){ clearTimeout(j.timer); j.status = 'queued'; j.err = null; j.pausedBy = false; }
 function renderQueue(){
   $('#queue').innerHTML = jobs.map(j => `<li class="job">
     <img src="${j.url}" alt="">
-    <div class="st ${j.status === 'error' ? 'err' : j.status === 'done' ? 'done' : ''}">${jobText(j)}</div>
-    <div class="acts">${j.status === 'error' ? `<button data-retry="${j.id}">${t('retry')}</button>` : ''}${j.status === 'done' || j.status === 'error' ? `<button data-rm="${j.id}">${t('remove')}</button>` : ''}</div>
+    <div class="st ${j.status === 'error' ? 'err' : j.status === 'done' ? 'done' : j.status === 'waiting' ? 'wait' : ''}">${jobText(j)}</div>
+    <div class="acts">${j.status === 'error' ? `<button data-retry="${j.id}">${t('retry')}</button>` : j.status === 'waiting' ? `<button data-retry="${j.id}">${t('retryNow')}</button>` : ''}${j.status === 'done' || j.status === 'error' || j.status === 'waiting' ? `<button data-rm="${j.id}">${t('remove')}</button>` : ''}</div>
   </li>`).join('');
   const errCount = jobs.filter(j => j.status === 'error').length;
   $('#retryAll').hidden = errCount < 2;
@@ -534,9 +547,9 @@ $('#retryAll').onclick = () => { jobs.forEach(j => { if(j.status === 'error') re
 $('#queue').addEventListener('click', e => {
   const r = e.target.closest('[data-retry]'), m = e.target.closest('[data-rm]');
   if(r){ const j = jobs.find(j => j.id == r.dataset.retry); if(j){ retryJob(j); renderQueue(); pump(); } }
-  if(m){ const i = jobs.findIndex(j => j.id == m.dataset.rm); if(i > -1){ URL.revokeObjectURL(jobs[i].url); jobs.splice(i, 1); renderQueue(); } }
+  if(m){ const i = jobs.findIndex(j => j.id == m.dataset.rm); if(i > -1){ clearTimeout(jobs[i].timer); URL.revokeObjectURL(jobs[i].url); jobs.splice(i, 1); renderQueue(); } }
 });
-window.addEventListener('beforeunload', e => { if(jobs.some(j => j.status === 'queued' || j.status === 'working')){ e.preventDefault(); e.returnValue = ''; } });
+window.addEventListener('beforeunload', e => { if(jobs.some(j => j.status === 'queued' || j.status === 'working' || j.status === 'waiting')){ e.preventDefault(); e.returnValue = ''; } });
 
 /* ---------- boot ---------- */
 applyText(); setTab(tab); setMode(mode); render();

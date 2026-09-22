@@ -51,6 +51,7 @@ button:disabled{opacity:.5;cursor:default}
 .job .st{color:var(--muted)}
 .job .st.err{color:var(--danger)}
 .job .st.done{color:var(--ok)}
+.job .st.wait{color:var(--warn)}
 .job .acts{display:flex;gap:6px}
 .job .acts button{padding:5px 10px;font-size:12.5px}
 .spin{display:inline-block;width:10px;height:10px;border-radius:50%;border:2px solid var(--accent);border-right-color:transparent;animation:sp .8s linear infinite;vertical-align:-1px;margin-right:4px}

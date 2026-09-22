@@ -18,6 +18,8 @@ const PROVIDERS = {
                 note:{ zh:'GLM-4V-Flash 免费，国内可直接使用', en:'GLM-4V-Flash is free; works in mainland China' } },
   qwen:       { label:'阿里云百炼 Qwen (Alibaba)', kind:'openai', base:'https://dashscope.aliyuncs.com/compatible-mode/v1', model:'qwen-vl-plus', keyUrl:'https://bailian.console.aliyun.com/',
                 note:{ zh:'新用户有免费额度，之后按量付费', en:'Free credit for new users, then pay as you go' } },
+  deepseek:   { label:'DeepSeek', kind:'openai', base:'https://api.deepseek.com', model:'deepseek-flash', keyUrl:'https://platform.deepseek.com/api_keys',
+                note:{ zh:'付费但很便宜，一张小票约 ¥0.01 以内；限速比免费服务宽松，适合一次传很多张', en:'Paid but very cheap (well under $0.01/receipt); higher rate limits than free tiers, good for large batches' } },
   openai:     { label:'OpenAI', kind:'openai', base:'https://api.openai.com/v1', model:'gpt-5-mini', keyUrl:'https://platform.openai.com/api-keys',
                 note:{ zh:'付费，按量计费', en:'Paid, pay as you go' } },
   anthropic:  { label:'Anthropic Claude', kind:'anthropic', model:'claude-haiku-4-5', keyUrl:'https://console.anthropic.com/settings/keys',

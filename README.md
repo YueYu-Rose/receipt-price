@@ -20,6 +20,7 @@ Snap your grocery receipts, let AI read them, and find out which store sells eac
   | [OpenRouter](https://openrouter.ai/keys) | openrouter/free | free models |
   | [Zhipu GLM 智谱](https://open.bigmodel.cn/usercenter/apikeys) | glm-4v-flash | free, works in mainland China |
   | [Alibaba Qwen 阿里云百炼](https://bailian.console.aliyun.com/) | qwen-vl-plus | free credit, then paid |
+  | [DeepSeek](https://platform.deepseek.com/api_keys) | deepseek-flash | paid, very cheap (well under $0.01/receipt) |
   | [OpenAI](https://platform.openai.com/api-keys) | gpt-5-mini | paid |
   | [Anthropic Claude](https://console.anthropic.com/settings/keys) | claude-haiku-4-5 | paid |
   | Any OpenAI-compatible API | your choice | — |

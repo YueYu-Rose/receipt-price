@@ -13,9 +13,10 @@ Snap your grocery receipts, let AI read them, and find out which store sells eac
 - **Spending** shows a weekly bar chart of what you spent, with previous weeks browsable and a tap-to-see-that-day breakdown.
 
 ## Reliability
+- Every photo you add is saved to IndexedDB (this device only) the moment you pick it, before any AI call — so if the tab gets suspended or evicted while backgrounded (very possible after leaving it for a while) and reloads, nothing you picked is lost. Reopening the page **automatically resumes** any photos that hadn't finished yet.
 - Uploads are hashed byte-for-byte; an exact repeat of a photo you already scanned is skipped instead of spending an AI call on it, and can be force-processed anyway.
 - A second receipt with the same store, date and total as one already saved is flagged "possible duplicate" (never auto-deleted) — catches the same paper photographed twice.
-- Transient failures (rate limits, an overloaded provider, a dropped connection) retry automatically with backoff instead of dumping manual retries on you; only real problems (bad key, missing model) stop and ask you to fix something.
+- Transient failures (rate limits, an overloaded provider, a dropped connection) retry automatically with backoff instead of dumping manual retries on you; only real problems (bad key, missing model) stop and ask you to fix something, and keep the photo saved until you do.
 - A durable **scan history** below the upload queue survives reloads, so a batch interrupted by the page getting backgrounded/suspended still shows what was attempted and what's left unfinished.
 
 ## Free, no accounts, private
@@ -53,6 +54,7 @@ then open http://localhost:8000.
 - iPhone 建议"添加到主屏幕"使用，并定期在"小票"页导出备份
 - 照片按字节去重，完全相同的照片不会重复调用 AI；店名+日期+总价都相同的两张小票会标"可能重复"提醒
 - 服务繁忙、限速这类临时错误会自动重试；扫描记录会保留下来，页面被切走中断了也能看到哪些没处理完
+- **照片一选好就会存进手机的 IndexedDB，不再只存在网页的临时内存里** ——就算页面被系统挂起或直接关掉重开，没处理完的照片重新打开网页会自动接着识别，不用重新选一遍
 - 新增"记账"页：按周查看每天花了多少钱，可以翻看之前几周
 
 ## License

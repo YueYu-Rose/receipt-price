@@ -63,6 +63,36 @@ async function makeThumb(file){
   bmp.close?.();
   return c.toDataURL('image/jpeg', 0.6);
 }
+/* A photo picked but not yet read only lives in page memory. If the tab gets suspended or
+   evicted (very likely after backgrounding for a while — switching apps, a long wait, low
+   memory) that memory is gone with no trace. So every photo is written to IndexedDB the
+   moment it's added, deleted once its job reaches done/duplicate/a terminal error, and
+   whatever is left over from a prior page load is picked back up and resumed automatically. */
+const DB_NAME = 'receipt-price', DB_STORE = 'pending';
+const dbReady = new Promise(resolve => {
+  if(!window.indexedDB){ resolve(null); return; }
+  const req = indexedDB.open(DB_NAME, 1);
+  req.onupgradeneeded = () => { try{ req.result.createObjectStore(DB_STORE, { keyPath:'id' }); }catch{} };
+  req.onsuccess = () => resolve(req.result);
+  req.onerror = () => resolve(null);
+});
+async function dbPut(entry){
+  const db = await dbReady; if(!db) return;
+  await new Promise(res => { try{ const tx = db.transaction(DB_STORE, 'readwrite'); tx.objectStore(DB_STORE).put(entry); tx.oncomplete = res; tx.onerror = res; }catch{ res(); } });
+}
+async function dbDelete(id){
+  if(!id) return;
+  const db = await dbReady; if(!db) return;
+  await new Promise(res => { try{ const tx = db.transaction(DB_STORE, 'readwrite'); tx.objectStore(DB_STORE).delete(id); tx.oncomplete = res; tx.onerror = res; }catch{ res(); } });
+}
+async function dbClear(){
+  const db = await dbReady; if(!db) return;
+  await new Promise(res => { try{ const tx = db.transaction(DB_STORE, 'readwrite'); tx.objectStore(DB_STORE).clear(); tx.oncomplete = res; tx.onerror = res; }catch{ res(); } });
+}
+async function dbGetAll(){
+  const db = await dbReady; if(!db) return [];
+  return new Promise(res => { try{ const tx = db.transaction(DB_STORE, 'readonly'); const req = tx.objectStore(DB_STORE).getAll(); req.onsuccess = () => res(req.result || []); req.onerror = () => res([]); }catch{ res([]); } });
+}
 let mode = store.get('rp.mode', 'exact'), multiOnly = store.get('rp.multi', false), tab = store.get('rp.tab', 'compare');
 let lang = store.get('rp.lang', /^zh/i.test(navigator.language || '') ? 'zh' : 'en');
 let query = '', editing = null, confirmDel = null;
@@ -549,6 +579,9 @@ async function addFiles(files){
     const logId = newId();
     jobs.push({ id:++jobSeq, file:f, url:URL.createObjectURL(f), status:isDup ? 'duplicate' : 'queued', autoAttempts:0, hash, logId });
     logAdd({ id:logId, thumb, hash, status:isDup ? 'duplicate' : 'interrupted', at:new Date().toISOString() });
+    // Persist the actual photo now, before it's read — a suspended/evicted tab can no longer
+    // lose it, and it's picked back up automatically next time this page loads (see resumePending).
+    if(!isDup){ dbPut({ id:logId, blob:f, hash, thumb, addedAt:new Date().toISOString() }); navigator.storage?.persist?.().catch(() => {}); }
     renderQueue(); renderScanLog();
   }
   pump();
@@ -572,6 +605,7 @@ async function run(job){
     receipts.push(rec); saveReceipts();
     job.status = 'done'; job.rec = rec; job.err = null;
     logUpdate(job.logId, { status:'done', store:rec.store, total:rec.total, itemCount:rec.items.length });
+    dbDelete(job.logId);
   }catch(e){
     const err = e instanceof ScanError ? e : new ScanError('eOther');
     if(err.retryable && !err.fatal && job.autoAttempts < MAX_AUTO_RETRIES){
@@ -580,6 +614,10 @@ async function run(job){
     } else {
       job.status = 'error'; job.err = err;
       logUpdate(job.logId, { status:'error', errKey:err.key, errArg:err.arg });
+      // A fatal error (bad key, missing model) is fixed in Settings, not by the photo changing —
+      // keep its copy so fixing the setting and reopening the page can resume it automatically.
+      // Anything else (blurry photo, not a receipt) would just fail the same way again; drop it.
+      if(!err.fatal) dbDelete(job.logId);
       if(err.fatal) jobs.forEach(j => { if(j.status === 'queued' || j.status === 'waiting'){ clearTimeout(j.timer); j.status = 'error'; j.err = err; j.pausedBy = true; logUpdate(j.logId, { status:'error', errKey:err.key, errArg:err.arg }); } });
     }
   }
@@ -645,7 +683,7 @@ $('#retryAll').onclick = () => { jobs.forEach(j => { if(j.status === 'error') re
 $('#queue').addEventListener('click', e => {
   const r = e.target.closest('[data-retry]'), m = e.target.closest('[data-rm]');
   if(r){ const j = jobs.find(j => j.id == r.dataset.retry); if(j){ retryJob(j); renderQueue(); pump(); } }
-  if(m){ const i = jobs.findIndex(j => j.id == m.dataset.rm); if(i > -1){ clearTimeout(jobs[i].timer); URL.revokeObjectURL(jobs[i].url); jobs.splice(i, 1); renderQueue(); } }
+  if(m){ const i = jobs.findIndex(j => j.id == m.dataset.rm); if(i > -1){ clearTimeout(jobs[i].timer); URL.revokeObjectURL(jobs[i].url); dbDelete(jobs[i].logId); jobs.splice(i, 1); renderQueue(); } }
 });
 window.addEventListener('beforeunload', e => { if(jobs.some(j => j.status === 'queued' || j.status === 'working' || j.status === 'waiting')){ e.preventDefault(); e.returnValue = ''; } });
 
@@ -731,5 +769,20 @@ $('#weekPrev').onclick = () => { spendWeekOffset--; selectedDay = null; renderSp
 $('#weekNext').onclick = () => { if(spendWeekOffset < 0){ spendWeekOffset++; selectedDay = null; renderSpend(); } };
 $('#weekToday').onclick = () => { spendWeekOffset = 0; selectedDay = null; renderSpend(); };
 
+/* ---------- resume ---------- */
+// Photos left over from a page instance that died mid-batch (see the IndexedDB note above):
+// pick them back up and keep going, so a killed tab costs re-opening it, not re-picking 23 photos.
+async function resumePending(){
+  const entries = await dbGetAll();
+  if(!entries.length) return;
+  for(const e of entries){
+    const logEntry = scanLog.find(x => x.id === e.id);
+    if(logEntry && (logEntry.status === 'done' || logEntry.status === 'error')){ dbDelete(e.id); continue; }
+    if(e.hash) seenHashes.add(e.hash);
+    jobs.push({ id:++jobSeq, file:e.blob, url:URL.createObjectURL(e.blob), status:'queued', autoAttempts:0, hash:e.hash, logId:e.id });
+  }
+  if(jobs.length){ renderQueue(); pump(); }
+}
+
 /* ---------- boot ---------- */
-applyText(); setTab(tab); setMode(mode); render();
+applyText(); setTab(tab); setMode(mode); render(); resumePending();

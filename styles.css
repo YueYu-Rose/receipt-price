@@ -58,7 +58,8 @@ button:disabled{opacity:.5;cursor:default}
 @keyframes sp{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion: reduce){.spin{animation:none}}
 .tabs{display:grid;grid-template-columns:1fr 1fr;background:var(--line);padding:3px;border-radius:12px;gap:3px}
-.tabs button{border:0;border-radius:9px;background:transparent;font-weight:600;padding:9px}
+.tabs.tabs3{grid-template-columns:1fr 1fr 1fr}
+.tabs button{border:0;border-radius:9px;background:transparent;font-weight:600;padding:9px;font-size:14px}
 .tabs button[aria-selected="true"]{background:var(--surface);box-shadow:0 1px 2px rgba(0,0,0,.08)}
 .controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px}
 .controls input[type=search]{flex:1 1 180px;min-width:0;font:inherit;padding:9px 12px;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:var(--ink)}
@@ -118,3 +119,29 @@ dialog::backdrop{background:rgba(0,0,0,.4)}
 .opts{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px;font-size:14px}
 .opts b{font-weight:600}
 .opts span{color:var(--muted);font-size:12.5px}
+
+/* --- scan reliability: active banner, dedupe, scan log --- */
+.notice.active{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.job .st.dup{color:var(--muted)}
+#scanLogWrap{margin-top:6px}
+#scanLogWrap summary{list-style:none;display:flex;align-items:center;gap:6px}
+#scanLogWrap summary::-webkit-details-marker{display:none}
+#scanLogWrap summary::before{content:'▸';color:var(--muted);font-size:11px;transition:transform .15s}
+#scanLogWrap[open] summary::before{transform:rotate(90deg)}
+.queue.log{max-height:340px;overflow-y:auto;margin-top:10px;padding-right:2px}
+.queue.log .job{opacity:.9}
+.queue.log .job img{opacity:.85}
+#clearLog{margin-top:10px;font-size:12.5px;color:var(--danger)}
+
+/* --- spending tab --- */
+.week-nav{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.week-nav>button{font-size:20px;line-height:1;padding:8px 16px;border-radius:12px}
+.week-label{display:flex;flex-direction:column;align-items:center;gap:6px}
+.week-range{font-weight:600;font-size:15px;white-space:nowrap}
+#weekChart svg{width:100%;height:auto;display:block}
+.bar-hit{cursor:pointer}
+.bar-hit:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.week-totals{display:flex;gap:24px;margin-top:4px}
+.week-totals .price{font-size:19px}
+#dayDetail .list{margin-top:12px}
+#dayDetail .empty{background:var(--surface);border:1px solid var(--line);border-radius:16px}

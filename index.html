@@ -53,13 +53,20 @@
       <label class="btn" id="galBtn"><span data-t="choosePhotos"></span><input id="galInput" type="file" accept="image/*" multiple></label>
     </div>
     <p class="hint" data-t="scanHint"></p>
+    <p class="notice" id="activeBanner" hidden></p>
     <button id="retryAll" class="btn small" hidden></button>
     <ul class="queue" id="queue"></ul>
+    <details id="scanLogWrap">
+      <summary id="scanLogSummary"></summary>
+      <ul class="queue log" id="scanLog"></ul>
+      <button id="clearLog" class="btn small" data-t="scanLogClear"></button>
+    </details>
   </section>
 
-  <div class="tabs" role="tablist">
+  <div class="tabs tabs3" role="tablist">
     <button role="tab" id="tabCompare" aria-selected="true" data-t="tabCompare"></button>
     <button role="tab" id="tabReceipts" aria-selected="false" data-t="tabReceipts"></button>
+    <button role="tab" id="tabSpend" aria-selected="false" data-t="tabSpend"></button>
   </div>
 
   <section id="viewCompare">
@@ -82,6 +89,27 @@
       <label class="btn small"><span data-t="importBackup"></span><input id="importInput" type="file" accept="application/json,.json"></label>
     </div>
     <p class="hint" data-t="backupHint"></p>
+  </section>
+
+  <section id="viewSpend" hidden>
+    <div class="card">
+      <div class="week-nav">
+        <button id="weekPrev" aria-label="prev">‹</button>
+        <div class="week-label">
+          <div id="weekRange" class="week-range"></div>
+          <button id="weekToday" class="btn small" data-t="thisWeek"></button>
+        </div>
+        <button id="weekNext" aria-label="next">›</button>
+      </div>
+      <div id="weekChart"></div>
+      <div class="week-totals">
+        <div><span class="meta" data-t="weekTotalLabel"></span><div class="price" id="weekTotal"></div></div>
+        <div><span class="meta" data-t="avgPerDay"></span><div class="price" id="weekAvg"></div></div>
+      </div>
+      <p class="hint" id="weekDateNote" hidden></p>
+      <p class="hint" data-t="tapBarHint"></p>
+    </div>
+    <div id="dayDetail"></div>
   </section>
 
   <footer class="foot">

@@ -34,6 +34,35 @@ const ai = (() => {
   return s;
 })();
 let receipts = store.get('rp.receipts', []);
+/* Durable record of every photo ever submitted, surviving reloads — so a batch that gets
+   interrupted (tab suspended/evicted while backgrounded) still leaves a trail of what was
+   attempted, instead of just silently vanishing. Capped so it can't grow without bound. */
+const SCAN_LOG_CAP = 150;
+let scanLog = store.get('rp.scanLog', []);
+function saveScanLog(){
+  if(scanLog.length > SCAN_LOG_CAP) scanLog.length = SCAN_LOG_CAP;
+  if(!store.set('rp.scanLog', scanLog)){ scanLog = scanLog.slice(0, Math.floor(SCAN_LOG_CAP / 2)); store.set('rp.scanLog', scanLog); }
+}
+function logAdd(entry){ scanLog.unshift(entry); saveScanLog(); }
+function logUpdate(id, patch){ const e = scanLog.find(x => x.id === id); if(e){ Object.assign(e, patch); saveScanLog(); } }
+// Exact-duplicate detection: hash every photo's bytes; a byte-identical repeat (the same file
+// picked twice, or re-selected across sessions) is skipped without spending an AI call on it.
+const seenHashes = new Set(scanLog.filter(e => e.status === 'done').map(e => e.hash).filter(Boolean));
+async function fileHash(file){
+  try{
+    const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
+    return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
+  }catch{ return null; } // e.g. no secure context — degrade to no dedupe rather than fail the upload
+}
+async function makeThumb(file){
+  const bmp = await createImageBitmap(file);
+  const s = Math.min(1, 90 / Math.max(bmp.width, bmp.height));
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(bmp.width * s)); c.height = Math.max(1, Math.round(bmp.height * s));
+  c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+  bmp.close?.();
+  return c.toDataURL('image/jpeg', 0.6);
+}
 let mode = store.get('rp.mode', 'exact'), multiOnly = store.get('rp.multi', false), tab = store.get('rp.tab', 'compare');
 let lang = store.get('rp.lang', /^zh/i.test(navigator.language || '') ? 'zh' : 'en');
 let query = '', editing = null, confirmDel = null;
@@ -56,7 +85,7 @@ const T = {
     exportBackup:'导出备份', importBackup:'导入备份',
     backupHint:'数据只存在这台设备的浏览器里。换手机或清除浏览器数据前，先导出备份。iPhone 上可以直接存到 iCloud 云盘。',
     takePhoto:'拍小票', choosePhotos:'从相册选',
-    scanHint:'可以连续拍，也可以一次选多张。照片排队自动识别，识别期间请保持这个页面开着。',
+    scanHint:'小票多的话，建议用"从相册选"一次选完，比反复点"拍小票"更稳——反复打开相机容易让页面在后台被系统打断。识别期间请保持这个页面开着、不要锁屏。',
     tabCompare:'比价', tabReceipts:'小票', search:'搜商品，如 yogurt / 酸奶',
     modeExact:'同款', modeCat:'同类', multiOnly:'只看多家店',
     compareHint:'规格都知道时按单价比（每 oz / fl oz / 个）；缺规格时按包装价比，只能当参考。价格都是税前的最新一次记录。',
@@ -80,6 +109,14 @@ const T = {
     eFormat:'识别结果格式不对，点重试。', eImage:'这张图片打不开，换一张试试。', eNoItems:'没读到商品，照片可能太糊或不是小票。', eOther:'识别失败，点重试。',
     retry:'重试', retryNow:'立即重试', remove:'移除', backupName:'小票比价备份', retryAll:n => `全部重试（${n} 张）`,
     autoRetry:(n, max) => `遇到临时错误（服务繁忙或额度紧张），正在自动重试（第 ${n}/${max} 次）…`,
+    activeBanner:'正在识别中：请留在这个页面，尽量避免切换 App、锁屏或反复打开相机——这些操作容易在后台被系统打断，导致照片没处理完。',
+    skippedDuplicate:'已跳过：和之前扫描过的一张照片完全相同', forceProcess:'仍然识别', interrupted:'未完成（可能是页面被关闭或切走了），请重新上传这张',
+    scanLogTitle:n => `扫描记录（共 ${n} 张）`, scanLogTally:(d, e, dup, p) => `${d} 张成功 · ${e} 张失败 · ${dup} 张跳过${p ? ` · ${p} 张未完成` : ''}`,
+    scanLogClear:'清空记录', scanLogClearConfirm:'确认清空全部记录？',
+    dupWarning:'可能重复', dupWarningTitle:'店名、日期、总价都和另一张小票一样，可能是同一张小票拍了两次',
+    tabSpend:'记账', thisWeek:'本周', weekTotalLabel:'本周共花费', avgPerDay:'日均',
+    weekDateNoteText:'* 部分小票没有识别到日期，按扫描当天估算', tapBarHint:'点一根柱子看当天明细', spendEmptyWeek:'这一天没有小票',
+    dayNamesShort:['一', '二', '三', '四', '五', '六', '日'],
   },
   en: {
     appName:'Receipt Price', settings:'Settings', langBtn:'中文',
@@ -92,7 +129,7 @@ const T = {
     exportBackup:'Export backup', importBackup:'Import backup',
     backupHint:'Your data lives only in this browser. Export a backup before switching phones or clearing browser data. On iPhone you can save it straight to iCloud Drive.',
     takePhoto:'Take photo', choosePhotos:'Choose photos',
-    scanHint:'Snap one after another or pick several at once. Photos are read in a queue; keep this page open while they process.',
+    scanHint:'For a lot of receipts, "Choose photos" to pick them all at once is more reliable than tapping "Take photo" repeatedly — reopening the camera each time risks the page getting suspended in the background. Keep this page open and unlocked while photos process.',
     tabCompare:'Compare', tabReceipts:'Receipts', search:'Search items, e.g. yogurt',
     modeExact:'Same product', modeCat:'Same type', multiOnly:'Only items from 2+ stores',
     compareHint:'When every size is known, items are ranked by unit price (per oz / fl oz / each). Otherwise by package price, so treat those as rough. All prices are before tax and use the latest record.',
@@ -116,6 +153,14 @@ const T = {
     eFormat:'The result was malformed. Tap Retry.', eImage:'Can\'t open this image. Try another one.', eNoItems:'No items found. The photo may be blurry or not a receipt.', eOther:'Reading failed. Tap Retry.',
     retry:'Retry', retryNow:'Retry now', remove:'Remove', backupName:'receipt-price-backup', retryAll:n => `Retry all (${n})`,
     autoRetry:(n, max) => `Temporary hiccup (busy service or rate limit) — auto-retrying (${n}/${max})…`,
+    activeBanner:'Reading receipts: stay on this page, and try not to switch apps, lock the screen or reopen the camera repeatedly — that can get the page suspended in the background and leave photos unfinished.',
+    skippedDuplicate:'Skipped — identical to a photo you already scanned', forceProcess:'Scan anyway', interrupted:'Didn\'t finish (the page may have been closed or switched away) — please upload this one again',
+    scanLogTitle:n => `Scan history (${n})`, scanLogTally:(d, e, dup, p) => `${d} done · ${e} failed · ${dup} skipped${p ? ` · ${p} unfinished` : ''}`,
+    scanLogClear:'Clear history', scanLogClearConfirm:'Clear all history for good?',
+    dupWarning:'Possible duplicate', dupWarningTitle:'Same store, date and total as another receipt — might be the same receipt photographed twice',
+    tabSpend:'Spending', thisWeek:'This week', weekTotalLabel:'Total this week', avgPerDay:'Avg/day',
+    weekDateNoteText:'* Some receipts had no date; grouped by the day you scanned them instead', tapBarHint:'Tap a bar to see that day', spendEmptyWeek:'No receipts that day',
+    dayNamesShort:['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
   },
 };
 const t = (k, ...a) => { const v = T[lang][k]; return typeof v === 'function' ? v(...a) : v; };
@@ -222,7 +267,7 @@ function renderReceipts(){
     return `<article class="card">
       <div class="rcpt-head">
         <div>
-          <div class="rcpt-store">${esc(r.store || t('unknownStore'))}${r.storeGuessed ? `<span class="chip guess">${t('guessed')}</span>` : ''}</div>
+          <div class="rcpt-store">${esc(r.store || t('unknownStore'))}${r.storeGuessed ? `<span class="chip guess">${t('guessed')}</span>` : ''}${r.possibleDuplicateOf && receipts.some(x => x.id === r.possibleDuplicateOf) ? `<span class="chip guess" title="${esc(t('dupWarningTitle'))}">${t('dupWarning')}</span>` : ''}</div>
           <div class="meta">${esc(r.branch || t('noAddr'))} · ${esc(r.date || t('noDate'))} · ${t('nItems', (r.items || []).length)}</div>
         </div>
         <div class="total"><div class="price">${money(Number(r.total))}</div><div class="meta">${typeof r.tax === 'number' && r.tax > 0 ? t('withTax') + money(r.tax) : t('noTax')}</div></div>
@@ -310,14 +355,17 @@ function render(){
   $('#setup').hidden = hasKey;
   $('#camBtn').classList.toggle('disabled', !hasKey);
   $('#galBtn').classList.toggle('disabled', !hasKey);
-  renderTips(); renderCompare(); renderReceipts(); renderQueue();
+  renderTips(); renderCompare(); renderReceipts(); renderQueue(); renderScanLog(); renderSpend();
 }
 function setTab(v){
   tab = v; store.set('rp.tab', v);
   $('#tabCompare').setAttribute('aria-selected', v === 'compare');
   $('#tabReceipts').setAttribute('aria-selected', v === 'receipts');
+  $('#tabSpend').setAttribute('aria-selected', v === 'spend');
   $('#viewCompare').hidden = v !== 'compare';
   $('#viewReceipts').hidden = v !== 'receipts';
+  $('#viewSpend').hidden = v !== 'spend';
+  if(v === 'spend') renderSpend();
 }
 function setMode(m){
   mode = m; store.set('rp.mode', m);
@@ -327,6 +375,7 @@ function setMode(m){
 }
 $('#tabCompare').onclick = () => setTab('compare');
 $('#tabReceipts').onclick = () => setTab('receipts');
+$('#tabSpend').onclick = () => setTab('spend');
 $('#modeExact').onclick = () => setMode('exact');
 $('#modeCat').onclick = () => setMode('cat');
 $('#multiOnly').checked = multiOnly;
@@ -491,10 +540,18 @@ const jobs = []; let running = 0, jobSeq = 0; const MAX_RUN = 2, MAX_AUTO_RETRIE
 // Free-tier services rate-limit per minute; a burst of uploads trips that, not a real problem.
 // Back off with jitter so retries spread out instead of re-hitting the limit together.
 const backoffMs = attempt => Math.min(30000, 1500 * 2 ** (attempt - 1)) + Math.random() * 1000;
-function addFiles(files){
+async function addFiles(files){
   if(!apiKey()){ $('#openSettings').click(); return; }
-  for(const f of files) jobs.push({ id:++jobSeq, file:f, url:URL.createObjectURL(f), status:'queued', autoAttempts:0 });
-  renderQueue(); pump();
+  for(const f of files){
+    const [thumb, hash] = await Promise.all([makeThumb(f).catch(() => null), fileHash(f)]);
+    const isDup = !!(hash && seenHashes.has(hash));
+    if(hash) seenHashes.add(hash);
+    const logId = newId();
+    jobs.push({ id:++jobSeq, file:f, url:URL.createObjectURL(f), status:isDup ? 'duplicate' : 'queued', autoAttempts:0, hash, logId });
+    logAdd({ id:logId, thumb, hash, status:isDup ? 'duplicate' : 'interrupted', at:new Date().toISOString() });
+    renderQueue(); renderScanLog();
+  }
+  pump();
 }
 $('#camInput').onchange = e => { addFiles([...e.target.files]); e.target.value = ''; };
 $('#galInput').onchange = e => { addFiles([...e.target.files]); e.target.value = ''; };
@@ -506,8 +563,15 @@ async function run(job){
     try{ b64 = await toJpegBase64(job.file); }catch{ throw new ScanError('eImage'); }
     const rec = clean(await askAI(b64) || {});
     if(!rec.items.length) throw new ScanError('eNoItems');
+    // Same store + date + total as an existing receipt: probably the same paper photographed twice.
+    // Flag it, but never auto-drop it — a same-day repeat purchase is a real, if rarer, case too.
+    const dupRec = receipts.find(r => r.store && rec.store && r.store.trim().toLowerCase() === rec.store.trim().toLowerCase()
+      && r.date && rec.date && r.date === rec.date
+      && typeof r.total === 'number' && typeof rec.total === 'number' && Math.abs(r.total - rec.total) < 0.01);
+    if(dupRec) rec.possibleDuplicateOf = dupRec.id;
     receipts.push(rec); saveReceipts();
     job.status = 'done'; job.rec = rec; job.err = null;
+    logUpdate(job.logId, { status:'done', store:rec.store, total:rec.total, itemCount:rec.items.length });
   }catch(e){
     const err = e instanceof ScanError ? e : new ScanError('eOther');
     if(err.retryable && !err.fatal && job.autoAttempts < MAX_AUTO_RETRIES){
@@ -515,10 +579,11 @@ async function run(job){
       job.timer = setTimeout(() => { if(job.status === 'waiting'){ job.status = 'queued'; job.err = null; renderQueue(); pump(); } }, backoffMs(job.autoAttempts));
     } else {
       job.status = 'error'; job.err = err;
-      if(err.fatal) jobs.forEach(j => { if(j.status === 'queued' || j.status === 'waiting'){ clearTimeout(j.timer); j.status = 'error'; j.err = err; j.pausedBy = true; } });
+      logUpdate(job.logId, { status:'error', errKey:err.key, errArg:err.arg });
+      if(err.fatal) jobs.forEach(j => { if(j.status === 'queued' || j.status === 'waiting'){ clearTimeout(j.timer); j.status = 'error'; j.err = err; j.pausedBy = true; logUpdate(j.logId, { status:'error', errKey:err.key, errArg:err.arg }); } });
     }
   }
-  renderQueue();
+  renderQueue(); renderScanLog();
 }
 function pump(){
   if(!apiKey()) return;
@@ -532,19 +597,50 @@ function jobText(j){
   if(j.status === 'working') return '<span class="spin"></span>' + t('working');
   if(j.status === 'done') return '✓ ' + esc(`${j.rec.store || t('unknownStore')} · ${t('nItems', j.rec.items.length)} · ${money(j.rec.total)}`);
   if(j.status === 'waiting') return '<span class="spin"></span>' + esc(t('autoRetry', j.autoAttempts, MAX_AUTO_RETRIES));
+  if(j.status === 'duplicate') return esc(t('skippedDuplicate'));
   return esc((j.pausedBy ? t('paused') : '') + t(j.err.key, j.err.arg));
 }
 function retryJob(j){ clearTimeout(j.timer); j.status = 'queued'; j.err = null; j.pausedBy = false; }
 function renderQueue(){
+  const cls = { error:'err', done:'done', waiting:'wait', duplicate:'dup' };
   $('#queue').innerHTML = jobs.map(j => `<li class="job">
     <img src="${j.url}" alt="">
-    <div class="st ${j.status === 'error' ? 'err' : j.status === 'done' ? 'done' : j.status === 'waiting' ? 'wait' : ''}">${jobText(j)}</div>
-    <div class="acts">${j.status === 'error' ? `<button data-retry="${j.id}">${t('retry')}</button>` : j.status === 'waiting' ? `<button data-retry="${j.id}">${t('retryNow')}</button>` : ''}${j.status === 'done' || j.status === 'error' || j.status === 'waiting' ? `<button data-rm="${j.id}">${t('remove')}</button>` : ''}</div>
+    <div class="st ${cls[j.status] || ''}">${jobText(j)}</div>
+    <div class="acts">${j.status === 'error' ? `<button data-retry="${j.id}">${t('retry')}</button>` : j.status === 'waiting' ? `<button data-retry="${j.id}">${t('retryNow')}</button>` : j.status === 'duplicate' ? `<button data-retry="${j.id}">${t('forceProcess')}</button>` : ''}${j.status === 'done' || j.status === 'error' || j.status === 'waiting' || j.status === 'duplicate' ? `<button data-rm="${j.id}">${t('remove')}</button>` : ''}</div>
   </li>`).join('');
   const errCount = jobs.filter(j => j.status === 'error').length;
   $('#retryAll').hidden = errCount < 2;
   if(errCount >= 2) $('#retryAll').textContent = t('retryAll', errCount);
+  const active = jobs.some(j => j.status === 'queued' || j.status === 'working' || j.status === 'waiting');
+  $('#activeBanner').hidden = !active;
+  if(active) $('#activeBanner').textContent = t('activeBanner');
 }
+function scanLogTally(){
+  let done = 0, err = 0, dup = 0, pending = 0;
+  for(const e of scanLog){ if(e.status === 'done') done++; else if(e.status === 'error') err++; else if(e.status === 'duplicate') dup++; else pending++; }
+  return { done, err, dup, pending };
+}
+function renderScanLog(){
+  const total = scanLog.length;
+  $('#scanLogWrap').hidden = total === 0;
+  if(!total) return;
+  const { done, err, dup, pending } = scanLogTally();
+  $('#scanLogSummary').textContent = t('scanLogTitle', total) + ' · ' + t('scanLogTally', done, err, dup, pending);
+  $('#scanLog').innerHTML = scanLog.slice(0, 80).map(e => {
+    const cls = { error:'err', done:'done', duplicate:'dup', interrupted:'wait' }[e.status] || '';
+    const text = e.status === 'done' ? '✓ ' + esc(`${e.store || t('unknownStore')} · ${t('nItems', e.itemCount || 0)} · ${money(e.total)}`)
+      : e.status === 'duplicate' ? esc(t('skippedDuplicate'))
+      : e.status === 'error' ? esc(t(e.errKey || 'eOther', e.errArg))
+      : esc(t('interrupted'));
+    return `<li class="job"><img src="${e.thumb || ''}" alt=""><div class="st ${cls}">${text}</div><div class="acts"></div></li>`;
+  }).join('');
+}
+let confirmClearLog = false;
+$('#clearLog').onclick = () => {
+  if(!confirmClearLog){ confirmClearLog = true; $('#clearLog').textContent = t('scanLogClearConfirm'); return; }
+  confirmClearLog = false; scanLog = []; store.set('rp.scanLog', scanLog); seenHashes.clear();
+  $('#clearLog').textContent = t('scanLogClear'); renderScanLog();
+};
 $('#retryAll').onclick = () => { jobs.forEach(j => { if(j.status === 'error') retryJob(j); }); renderQueue(); pump(); };
 $('#queue').addEventListener('click', e => {
   const r = e.target.closest('[data-retry]'), m = e.target.closest('[data-rm]');
@@ -552,6 +648,88 @@ $('#queue').addEventListener('click', e => {
   if(m){ const i = jobs.findIndex(j => j.id == m.dataset.rm); if(i > -1){ clearTimeout(jobs[i].timer); URL.revokeObjectURL(jobs[i].url); jobs.splice(i, 1); renderQueue(); } }
 });
 window.addEventListener('beforeunload', e => { if(jobs.some(j => j.status === 'queued' || j.status === 'working' || j.status === 'waiting')){ e.preventDefault(); e.returnValue = ''; } });
+
+/* ---------- spending ---------- */
+let spendWeekOffset = 0, selectedDay = null;
+function mondayOf(d){ const nd = new Date(d.getFullYear(), d.getMonth(), d.getDate()); nd.setDate(nd.getDate() - (nd.getDay() + 6) % 7); return nd; }
+function dateKey(d){ return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+function receiptBucket(r){
+  if(r.date) return { key:r.date, estimated:false };
+  if(r.createdAt) return { key:dateKey(new Date(r.createdAt)), estimated:true };
+  return null;
+}
+const receiptSpend = r => typeof r.total === 'number' ? r.total : (r.items || []).reduce((s, it) => s + (typeof it.lineTotal === 'number' ? it.lineTotal : 0), 0);
+function buildDayMap(){
+  const map = new Map();
+  for(const r of receipts){
+    const b = receiptBucket(r); if(!b) continue;
+    if(!map.has(b.key)) map.set(b.key, { total:0, estimated:false, receipts:[] });
+    const e = map.get(b.key);
+    e.total += receiptSpend(r); e.estimated = e.estimated || b.estimated; e.receipts.push(r);
+  }
+  return map;
+}
+function buildWeekChartSvg(days){
+  const W = 340, H = 150, padL = 4, padR = 4, padT = 18, padB = 22, gap = 8;
+  const bw = (W - padL - padR - gap * 6) / 7;
+  const max = Math.max(1, ...days.map(d => d.total));
+  const names = t('dayNamesShort'), todayKey = dateKey(new Date());
+  const bars = days.map((d, i) => {
+    const x = padL + i * (bw + gap);
+    const h = d.total > 0 ? Math.max(3, (d.total / max) * (H - padT - padB)) : 2;
+    const y = H - padB - h, isToday = d.key === todayKey, isSel = d.key === selectedDay;
+    const label = d.total > 0 ? money(d.total).replace('.00', '') : '';
+    return `<rect class="bar-hit" tabindex="0" role="button" aria-label="${esc(names[i])} ${esc(money(d.total))}" data-day="${d.key}" x="${x}" y="${padT}" width="${bw}" height="${H - padT - padB}" fill="transparent"></rect>
+      <rect x="${x}" y="${y}" width="${bw}" height="${h}" rx="4" fill="var(--accent)" opacity="${d.total > 0 ? 1 : .25}" pointer-events="none"></rect>
+      ${label ? `<text x="${x + bw / 2}" y="${y - 5}" text-anchor="middle" font-size="10" fill="var(--muted)" pointer-events="none">${esc(label)}</text>` : ''}
+      <text x="${x + bw / 2}" y="${H - 6}" text-anchor="middle" font-size="11" fill="${isToday ? 'var(--accent)' : 'var(--muted)'}" font-weight="${isToday ? 700 : 400}" pointer-events="none">${esc(names[i])}</text>
+      ${isSel ? `<rect x="${x}" y="${padT}" width="${bw}" height="${H - padT - padB}" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="2,2" rx="4" pointer-events="none"></rect>` : ''}`;
+  }).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" role="img"><line x1="${padL}" y1="${H - padB}" x2="${W - padR}" y2="${H - padB}" stroke="var(--line)" stroke-width="1"></line>${bars}</svg>`;
+}
+function fmtWeekRange(monday){
+  const sunday = new Date(monday); sunday.setDate(sunday.getDate() + 6);
+  const f = new Intl.DateTimeFormat(lang === 'zh' ? 'zh-CN' : 'en-US', { month:'short', day:'numeric' });
+  return f.format(monday) + ' – ' + f.format(sunday);
+}
+function renderDayDetail(days){
+  const el = $('#dayDetail');
+  if(!selectedDay){ el.innerHTML = ''; return; }
+  const d = days.find(x => x.key === selectedDay);
+  if(!d || !d.receipts.length){ el.innerHTML = `<div class="empty">${t('spendEmptyWeek')}</div>`; return; }
+  const f = new Intl.DateTimeFormat(lang === 'zh' ? 'zh-CN' : 'en-US', { month:'long', day:'numeric', weekday:'long' });
+  el.innerHTML = `<div class="list">` + d.receipts.map(r =>
+    `<div class="row"><div class="row-head"><div class="pname">${esc(r.store || t('unknownStore'))}</div><span class="price">${money(receiptSpend(r))}</span></div></div>`).join('') + `</div>
+    <p class="hint">${esc(f.format(d.date))}</p>`;
+}
+function renderSpend(){
+  if(!$('#weekChart')) return;
+  const monday = mondayOf(new Date()); monday.setDate(monday.getDate() + spendWeekOffset * 7);
+  $('#weekRange').textContent = fmtWeekRange(monday);
+  $('#weekNext').disabled = spendWeekOffset >= 0;
+  $('#weekToday').hidden = spendWeekOffset === 0;
+  const map = buildDayMap(), days = [];
+  let anyEstimated = false;
+  for(let i = 0; i < 7; i++){
+    const d = new Date(monday); d.setDate(d.getDate() + i);
+    const key = dateKey(d), e = map.get(key);
+    if(e?.estimated) anyEstimated = true;
+    days.push({ date:d, key, total:e?.total || 0, receipts:e?.receipts || [] });
+  }
+  const weekTotal = days.reduce((s, d) => s + d.total, 0);
+  $('#weekTotal').textContent = money(weekTotal);
+  $('#weekAvg').textContent = money(weekTotal / 7);
+  $('#weekDateNote').hidden = !anyEstimated;
+  if(anyEstimated) $('#weekDateNote').textContent = t('weekDateNoteText');
+  $('#weekChart').innerHTML = buildWeekChartSvg(days);
+  if(!days.some(d => d.key === selectedDay)) selectedDay = null;
+  renderDayDetail(days);
+}
+$('#weekChart').addEventListener('click', e => { const r = e.target.closest('[data-day]'); if(!r) return; selectedDay = selectedDay === r.dataset.day ? null : r.dataset.day; renderSpend(); });
+$('#weekChart').addEventListener('keydown', e => { if(e.key !== 'Enter' && e.key !== ' ') return; const r = e.target.closest('[data-day]'); if(!r) return; e.preventDefault(); selectedDay = selectedDay === r.dataset.day ? null : r.dataset.day; renderSpend(); });
+$('#weekPrev').onclick = () => { spendWeekOffset--; selectedDay = null; renderSpend(); };
+$('#weekNext').onclick = () => { if(spendWeekOffset < 0){ spendWeekOffset++; selectedDay = null; renderSpend(); } };
+$('#weekToday').onclick = () => { spendWeekOffset = 0; selectedDay = null; renderSpend(); };
 
 /* ---------- boot ---------- */
 applyText(); setTab(tab); setMode(mode); render();

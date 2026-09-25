@@ -629,10 +629,9 @@ async function run(job){
     } else {
       job.status = 'error'; job.err = err;
       logUpdate(job.logId, { status:'error', errKey:err.key, errArg:err.arg });
-      // A fatal error (bad key, missing model) is fixed in Settings, not by the photo changing —
-      // keep its copy so fixing the setting and reopening the page can resume it automatically.
-      // Anything else (blurry photo, not a receipt) would just fail the same way again; drop it.
-      if(!err.fatal) dbDelete(job.logId);
+      // Never drop a failed photo's copy on its own — only a success or the user removing it
+      // should do that. A reload now brings every unresolved item back with its retry button
+      // intact, whatever it failed with, instead of quietly losing the chance to retry it.
       if(err.fatal) jobs.forEach(j => { if(j.status === 'queued' || j.status === 'waiting'){ clearTimeout(j.timer); j.status = 'error'; j.err = err; j.pausedBy = true; logUpdate(j.logId, { status:'error', errKey:err.key, errArg:err.arg }); } });
     }
   }
@@ -691,8 +690,13 @@ function renderScanLog(){
 let confirmClearLog = false;
 $('#clearLog').onclick = () => {
   if(!confirmClearLog){ confirmClearLog = true; $('#clearLog').textContent = t('scanLogClearConfirm'); return; }
-  confirmClearLog = false; scanLog = []; store.set('rp.scanLog', scanLog); seenHashes.clear();
-  $('#clearLog').textContent = t('scanLogClear'); renderScanLog();
+  confirmClearLog = false;
+  // Clearing history now means "give up on everything unresolved" — it's the same pool of
+  // photos IndexedDB is holding onto, so wipe that too, and cancel/drop any still-live jobs.
+  scanLog = []; store.set('rp.scanLog', scanLog); seenHashes.clear(); dbClear();
+  jobs.forEach(j => { clearTimeout(j.timer); URL.revokeObjectURL(j.url); });
+  jobs.length = 0;
+  $('#clearLog').textContent = t('scanLogClear'); renderScanLog(); renderQueue();
 };
 $('#retryAll').onclick = () => { jobs.forEach(j => { if(j.status === 'error') retryJob(j); }); renderQueue(); pump(); };
 $('#queue').addEventListener('click', e => {
@@ -785,18 +789,26 @@ $('#weekNext').onclick = () => { if(spendWeekOffset < 0){ spendWeekOffset++; sel
 $('#weekToday').onclick = () => { spendWeekOffset = 0; selectedDay = null; renderSpend(); };
 
 /* ---------- resume ---------- */
-// Photos left over from a page instance that died mid-batch (see the IndexedDB note above):
-// pick them back up and keep going, so a killed tab costs re-opening it, not re-picking 23 photos.
+// Photos left over from a page instance that died mid-batch, AND every photo that ended in an
+// error, come back here — nothing with an unresolved photo is ever just gone after a reload.
+// A never-finished one (was queued/working/waiting) resumes and keeps processing on its own; one
+// that had already failed comes back as 'error' with its retry button, but isn't auto-retried —
+// so reopening the page after a run of failures doesn't immediately re-spend quota on all of them.
 async function resumePending(){
   const entries = await dbGetAll();
   if(!entries.length) return;
+  let anyQueued = false;
   for(const e of entries){
     const logEntry = scanLog.find(x => x.id === e.id);
-    if(logEntry && (logEntry.status === 'done' || logEntry.status === 'error')){ dbDelete(e.id); continue; }
+    if(logEntry?.status === 'done'){ dbDelete(e.id); continue; } // shouldn't happen, but don't resurrect it if it does
     if(e.hash) seenHashes.add(e.hash);
-    jobs.push({ id:++jobSeq, file:e.blob, url:URL.createObjectURL(e.blob), status:'queued', autoAttempts:0, hash:e.hash, logId:e.id });
+    const job = { id:++jobSeq, file:e.blob, url:URL.createObjectURL(e.blob), status:'queued', autoAttempts:0, hash:e.hash, logId:e.id };
+    if(logEntry?.status === 'error'){ job.status = 'error'; job.err = new ScanError(logEntry.errKey || 'eOther', logEntry.errArg, false, false); }
+    else anyQueued = true;
+    jobs.push(job);
   }
-  if(jobs.length){ renderQueue(); pump(); }
+  renderQueue();
+  if(anyQueued) pump();
 }
 
 /* ---------- boot ---------- */

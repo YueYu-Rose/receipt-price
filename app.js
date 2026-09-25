@@ -135,7 +135,8 @@ const T = {
     queued:'排队中', working:'识别中…', paused:'已暂停：',
     eNet:'网络连不上，检查网络后点重试。', eKey:'API 密钥无效，到"设置"里重新填。', eForbid:'API 密钥没有权限，到"设置"里检查。',
     eModel:m => `找不到模型 ${m}（服务商可能已经下线了这个版本），到"设置"里换一个模型名，比如 Gemini 可以填 gemini-flash-latest。`, eQuota:'免费额度暂时用完了（每分钟或每天有上限），过一会儿再点重试。',
-    eHttp:c => `识别失败（${c}），点重试。`, eBlocked:'这张图片被拒绝识别，换一张试试。', eEmpty:'没有返回结果，点重试。',
+    eHttp:c => `识别失败（${c}），点重试。`, eBlocked:'这张图片被拒绝识别，换一张试试。', eEmpty:'没有返回结果，正在重试。',
+    eTruncated:'这张小票商品太多，AI 还没写完答案就被截断了，正在自动重试。如果一直这样，可以在"设置"里换一个模型。',
     eFormat:'识别结果格式不对，点重试。', eImage:'这张图片打不开，换一张试试。', eNoItems:'没读到商品，照片可能太糊或不是小票。', eOther:'识别失败，点重试。',
     retry:'重试', retryNow:'立即重试', remove:'移除', backupName:'小票比价备份', retryAll:n => `全部重试（${n} 张）`,
     autoRetry:(n, max) => `遇到临时错误（服务繁忙或额度紧张），正在自动重试（第 ${n}/${max} 次）…`,
@@ -179,7 +180,8 @@ const T = {
     queued:'Queued', working:'Reading…', paused:'Paused: ',
     eNet:'Can\'t reach the network. Check your connection and tap Retry.', eKey:'Invalid API key. Update it in Settings.', eForbid:'This API key isn\'t allowed. Check it in Settings.',
     eModel:m => `Model ${m} not found (the provider may have retired this version). Change the model name in Settings — for Gemini try gemini-flash-latest.`, eQuota:'Free quota used up for now (there are per-minute and per-day limits). Wait a bit and tap Retry.',
-    eHttp:c => `Reading failed (${c}). Tap Retry.`, eBlocked:'This image was refused. Try another photo.', eEmpty:'No result came back. Tap Retry.',
+    eHttp:c => `Reading failed (${c}). Tap Retry.`, eBlocked:'This image was refused. Try another photo.', eEmpty:'No result came back, retrying.',
+    eTruncated:'This receipt has a lot of items and the AI got cut off before finishing — retrying automatically. If this keeps happening, try a different model in Settings.',
     eFormat:'The result was malformed. Tap Retry.', eImage:'Can\'t open this image. Try another one.', eNoItems:'No items found. The photo may be blurry or not a receipt.', eOther:'Reading failed. Tap Retry.',
     retry:'Retry', retryNow:'Retry now', remove:'Remove', backupName:'receipt-price-backup', retryAll:n => `Retry all (${n})`,
     autoRetry:(n, max) => `Temporary hiccup (busy service or rate limit) — auto-retrying (${n}/${max})…`,
@@ -496,10 +498,14 @@ function buildRequest(b64){
   if(p.kind === 'gemini') return {
     url:`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(m)}:generateContent`,
     headers:{ 'Content-Type':'application/json', 'x-goog-api-key':key },
+    // maxOutputTokens is generous on purpose: newer Gemini models "think" before answering, and
+    // those thinking tokens are billed against the same budget — too low a cap can silently
+    // consume it all before any of the actual JSON gets written, leaving text empty.
     body:{ contents:[{ parts:[ { inline_data:{ mime_type:'image/jpeg', data:b64 } }, { text:PROMPT } ] }],
-           generationConfig:{ responseMimeType:'application/json', temperature:0 } },
+           generationConfig:{ responseMimeType:'application/json', temperature:0, maxOutputTokens:8192 } },
     read:j => (j?.candidates?.[0]?.content?.parts || []).map(x => x.text || '').join(''),
     blocked:j => !!j?.promptFeedback?.blockReason,
+    truncated:j => j?.candidates?.[0]?.finishReason === 'MAX_TOKENS',
   };
   if(p.kind === 'anthropic') return {
     url:'https://api.anthropic.com/v1/messages',
@@ -538,7 +544,11 @@ async function askAI(b64){
     throw new ScanError('eHttp', res.status, false, res.status >= 500);
   }
   const text = req.read(body);
-  if(!text) throw new ScanError(req.blocked(body) ? 'eBlocked' : 'eEmpty');
+  if(!text){
+    if(req.blocked(body)) throw new ScanError('eBlocked');
+    if(req.truncated?.(body)) throw new ScanError('eTruncated', null, false, true); // worth an automatic retry
+    throw new ScanError('eEmpty', null, false, true);
+  }
   try{ return JSON.parse(text); }
   catch{
     const a = text.indexOf('{'), b = text.lastIndexOf('}');

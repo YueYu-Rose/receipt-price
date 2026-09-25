@@ -16,7 +16,7 @@ Snap your grocery receipts, let AI read them, and find out which store sells eac
 - Every photo you add is saved to IndexedDB (this device only) the moment you pick it, before any AI call — so if the tab gets suspended or evicted while backgrounded (very possible after leaving it for a while) and reloads, nothing you picked is lost. Reopening the page **automatically resumes** any photos that hadn't finished yet.
 - Uploads are hashed byte-for-byte; an exact repeat of a photo you already scanned is skipped instead of spending an AI call on it, and can be force-processed anyway.
 - A second receipt with the same store, date and total as one already saved is flagged "possible duplicate" (never auto-deleted) — catches the same paper photographed twice.
-- Transient failures (rate limits, an overloaded provider, a dropped connection) retry automatically with backoff instead of dumping manual retries on you; only real problems (bad key, missing model) stop and ask you to fix something, and keep the photo saved until you do.
+- Transient failures (rate limits, an overloaded provider, a dropped connection, a response cut off by the model's internal "thinking" eating its own token budget) retry automatically with backoff instead of dumping manual retries on you; only real problems (bad key, missing model) stop and ask you to fix something, and keep the photo saved until you do.
 - A durable **scan history** below the upload queue survives reloads, so a batch interrupted by the page getting backgrounded/suspended still shows what was attempted and what's left unfinished.
 
 ## Free, no accounts, private

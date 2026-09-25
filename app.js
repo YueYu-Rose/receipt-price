@@ -514,16 +514,21 @@ function buildRequest(b64){
       { type:'image', source:{ type:'base64', media_type:'image/jpeg', data:b64 } }, { type:'text', text:PROMPT } ] }] },
     read:j => (j?.content || []).map(x => x.text || '').join(''),
     blocked:j => j?.stop_reason === 'refusal',
+    truncated:j => j?.stop_reason === 'max_tokens',
   };
   const headers = { 'Content-Type':'application/json', 'Authorization':'Bearer ' + key };
   if(ai.provider === 'openrouter') headers['X-Title'] = 'Receipt Price';
   return {
     url:baseUrl() + '/chat/completions', headers,
-    body:{ model:m, messages:[{ role:'user', content:[
+    // max_tokens explicit and generous: left unset, some providers default low enough that a
+    // busy receipt's JSON gets cut off mid-answer (finish_reason "length") with little or nothing
+    // in content — that's what was showing up as an empty response on DeepSeek.
+    body:{ model:m, max_tokens:8192, messages:[{ role:'user', content:[
       { type:'text', text:PROMPT },
       { type:'image_url', image_url:{ url:p.rawB64 ? b64 : 'data:image/jpeg;base64,' + b64 } } ] }] },
     read:j => { const c = j?.choices?.[0]?.message?.content; return Array.isArray(c) ? c.map(x => x.text || '').join('') : (c || ''); },
     blocked:j => j?.choices?.[0]?.finish_reason === 'content_filter',
+    truncated:j => j?.choices?.[0]?.finish_reason === 'length',
   };
 }
 async function askAI(b64){

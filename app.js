@@ -518,12 +518,16 @@ function buildRequest(b64){
   };
   const headers = { 'Content-Type':'application/json', 'Authorization':'Bearer ' + key };
   if(ai.provider === 'openrouter') headers['X-Title'] = 'Receipt Price';
+  const extra = {};
+  // DeepSeek's own docs: reasoning ("thinking") defaults ON (reasoning_effort "high") and those
+  // tokens are billed against the very same max_tokens budget — capping max_tokens without also
+  // turning this off just shrinks the budget thinking was expecting, making truncation WORSE, not
+  // better (this was the real cause of the repeated "truncated" failures, not a too-low cap).
+  // This extraction task gains nothing from reasoning, so turn it off instead of budgeting for it.
+  if(ai.provider === 'deepseek') extra.reasoning_effort = 'none';
   return {
     url:baseUrl() + '/chat/completions', headers,
-    // max_tokens explicit and generous: left unset, some providers default low enough that a
-    // busy receipt's JSON gets cut off mid-answer (finish_reason "length") with little or nothing
-    // in content — that's what was showing up as an empty response on DeepSeek.
-    body:{ model:m, max_tokens:8192, messages:[{ role:'user', content:[
+    body:{ model:m, max_tokens:8192, ...extra, messages:[{ role:'user', content:[
       { type:'text', text:PROMPT },
       { type:'image_url', image_url:{ url:p.rawB64 ? b64 : 'data:image/jpeg;base64,' + b64 } } ] }] },
     read:j => { const c = j?.choices?.[0]?.message?.content; return Array.isArray(c) ? c.map(x => x.text || '').join('') : (c || ''); },
